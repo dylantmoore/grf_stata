@@ -11,4 +11,7 @@ d variable importance, calibration tests, and prediction on new data).
 d
 d Requires Stata 14.0 or later.
 d
-p grf_stata
+p grf_stata All platforms (macOS, Linux, Windows)
+p grf_stata_mac macOS only (ARM64 + Intel)
+p grf_stata_linux Linux only (x86_64)
+p grf_stata_win Windows only (x86_64)

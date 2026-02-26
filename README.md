@@ -5,6 +5,16 @@ Stata implementation of the [grf](https://github.com/grf-labs/grf) R package (v2
 ## Installation
 
 ```stata
+* macOS:
+net install grf_stata_mac, from("https://raw.githubusercontent.com/dylantmoore/grf_stata/main") replace
+
+* Linux:
+net install grf_stata_linux, from("https://raw.githubusercontent.com/dylantmoore/grf_stata/main") replace
+
+* Windows:
+net install grf_stata_win, from("https://raw.githubusercontent.com/dylantmoore/grf_stata/main") replace
+
+* All platforms (larger download):
 net install grf_stata, from("https://raw.githubusercontent.com/dylantmoore/grf_stata/main") replace
 ```
 
