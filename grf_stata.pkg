@@ -1,0 +1,60 @@
+v 3
+d GRF: Generalized Random Forests for Stata
+d
+d Wraps the grf C++ library (grf-labs/grf, v2.5.0, GPL-3.0)
+d by Susan Athey, Julie Tibshirani, and Stefan Wager.
+d
+d Forest types: regression, causal, quantile, instrumental,
+d probability, survival, causal survival, multi-arm causal,
+d multi-regression, local linear regression, boosted regression,
+d and LM forest.
+d
+d Post-estimation: ATE, best linear projection, variable importance,
+d calibration test, RATE, predict on new data, tuning.
+d
+d Requires Stata 14.0 or later.
+d
+d Distribution-Date: 20260225
+d
+F grf_regression_forest.ado
+F grf_regression_forest.sthlp
+F grf_causal_forest.ado
+F grf_causal_forest.sthlp
+F grf_quantile_forest.ado
+F grf_quantile_forest.sthlp
+F grf_instrumental_forest.ado
+F grf_instrumental_forest.sthlp
+F grf_probability_forest.ado
+F grf_probability_forest.sthlp
+F grf_survival_forest.ado
+F grf_survival_forest.sthlp
+F grf_causal_survival_forest.ado
+F grf_causal_survival_forest.sthlp
+F grf_multi_arm_causal_forest.ado
+F grf_multi_arm_causal_forest.sthlp
+F grf_multi_regression_forest.ado
+F grf_multi_regression_forest.sthlp
+F grf_ll_regression_forest.ado
+F grf_ll_regression_forest.sthlp
+F grf_boosted_regression_forest.ado
+F grf_boosted_regression_forest.sthlp
+F grf_lm_forest.ado
+F grf_lm_forest.sthlp
+F grf_ate.ado
+F grf_ate.sthlp
+F grf_best_linear_projection.ado
+F grf_best_linear_projection.sthlp
+F grf_variable_importance.ado
+F grf_variable_importance.sthlp
+F grf_test_calibration.ado
+F grf_test_calibration.sthlp
+F grf_predict.ado
+F grf_predict.sthlp
+F grf_tune.ado
+F grf_tune.sthlp
+F grf_rate.ado
+F grf_rate.sthlp
+F grf_plugin.darwin-arm64.plugin
+F grf_plugin.darwin-x86_64.plugin
+F grf_plugin.linux-x86_64.plugin
+F grf_plugin.windows-x86_64.plugin

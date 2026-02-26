@@ -1,0 +1,14 @@
+v 3
+d GRF: Generalized Random Forests for Stata
+d Wraps the grf C++ library (grf-labs/grf, v2.5.0, GPL-3.0)
+d by Athey, Tibshirani, and Wager.
+d
+d Provides causal forests, regression forests, quantile forests,
+d instrumental forests, probability forests, survival forests,
+d local linear forests, boosted forests, LM forests,
+d and associated post-estimation commands (ATE, BLP, RATE,
+d variable importance, calibration tests, and prediction on new data).
+d
+d Requires Stata 14.0 or later.
+d
+p grf_stata

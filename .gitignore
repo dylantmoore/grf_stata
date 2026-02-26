@@ -1,0 +1,4 @@
+*.log
+*.dta
+*.o
+.DS_Store
