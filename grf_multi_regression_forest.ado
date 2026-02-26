@@ -140,24 +140,22 @@ program define grf_multi_regression_forest, eclass
     display as text ""
 
     /* ---- Load plugin ---- */
-    capture program grf_plugin, plugin ///
-        using("grf_plugin.darwin-arm64.plugin")
-    if _rc & _rc != 110 {
-        capture program grf_plugin, plugin ///
-            using("grf_plugin.darwin-x86_64.plugin")
-        if _rc & _rc != 110 {
-            capture program grf_plugin, plugin ///
-                using("grf_plugin.linux-x86_64.plugin")
-            if _rc & _rc != 110 {
-                capture program grf_plugin, plugin ///
-                    using("grf_plugin.windows-x86_64.plugin")
-                if _rc & _rc != 110 {
-                    display as error "could not load grf_plugin"
-                    display as error "make sure the .plugin file is installed"
-                    exit 601
+    local plugin_loaded 0
+    foreach plat in darwin-arm64 darwin-x86_64 linux-x86_64 windows-x86_64 {
+        if !`plugin_loaded' {
+            capture findfile grf_plugin.`plat'.plugin
+            if _rc == 0 {
+                capture program grf_plugin, plugin using("`r(fn)'")
+                if _rc == 0 | _rc == 110 {
+                    local plugin_loaded 1
                 }
             }
         }
+    }
+    if !`plugin_loaded' {
+        display as error "could not load grf_plugin"
+        display as error "make sure the .plugin file is installed"
+        exit 601
     }
 
     /* ---- Call plugin ----
