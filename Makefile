@@ -1,12 +1,11 @@
 # Makefile for grf_plugin (C++ wrapper around grf library)
 #
 # Targets:
-#   all            - Build for local platform (darwin-arm64)
-#   darwin-arm64   - Build for macOS Apple Silicon
-#   darwin-x86_64  - Cross-compile for macOS Intel
+#   all            - Build for local platform (macOS ARM64)
+#   macosx         - Build for macOS Apple Silicon (ARM64)
 #   linux          - Cross-compile for Linux x86_64
 #   windows        - Cross-compile for Windows x86_64
-#   all-platforms  - Build all four targets
+#   all-platforms  - Build all three targets
 #   clean          - Remove all built plugins
 
 VENDOR_GRF = vendor/grf/core
@@ -80,10 +79,9 @@ PLUGIN_SRC = grf_plugin.cpp
 STPLUGIN_SRC = stplugin.c
 
 # Output filenames
-TARGET_DARWIN_ARM64  = grf_plugin.darwin-arm64.plugin
-TARGET_DARWIN_X86    = grf_plugin.darwin-x86_64.plugin
-TARGET_LINUX         = grf_plugin.linux-x86_64.plugin
-TARGET_WINDOWS       = grf_plugin.windows-x86_64.plugin
+TARGET_DARWIN_ARM64  = grf_plugin_macosx.plugin
+TARGET_LINUX         = grf_plugin_unix.plugin
+TARGET_WINDOWS       = grf_plugin_windows.plugin
 
 # ── Darwin arm64 (macOS Apple Silicon) ─────────────────────────────
 DARWIN_ARM64_CXX    = g++
@@ -91,13 +89,6 @@ DARWIN_ARM64_CC     = gcc
 DARWIN_ARM64_CXXFLAGS = -std=c++17 -O3 -fPIC -DSYSTEM=APPLEMAC -arch arm64 $(INCLUDES)
 DARWIN_ARM64_CFLAGS   = -O3 -fPIC -DSYSTEM=APPLEMAC -arch arm64 -I.
 DARWIN_ARM64_LDFLAGS  = -bundle -lpthread
-
-# ── Darwin x86_64 (macOS Intel) ───────────────────────────────────
-DARWIN_X86_CXX    = g++
-DARWIN_X86_CC     = gcc
-DARWIN_X86_CXXFLAGS = -std=c++17 -O3 -fPIC -DSYSTEM=APPLEMAC -arch x86_64 $(INCLUDES)
-DARWIN_X86_CFLAGS   = -O3 -fPIC -DSYSTEM=APPLEMAC -arch x86_64 -I.
-DARWIN_X86_LDFLAGS  = -bundle -lpthread
 
 # ── Windows (x86_64, cross-compiled with mingw-w64) ───────────────
 WIN_CXX    = x86_64-w64-mingw32-g++
@@ -114,16 +105,15 @@ LINUX_CFLAGS   = -O3 -fPIC -DSYSTEM=OPUNIX -I.
 LINUX_LDFLAGS  = -shared -static-libstdc++ -static-libgcc -lpthread
 
 # ── Phony targets ─────────────────────────────────────────────────
-.PHONY: all darwin-arm64 darwin-x86_64 linux windows all-platforms clean
+.PHONY: all macosx linux windows all-platforms clean
 
 # Default: build for local platform only
-all: darwin-arm64
+all: macosx
 
-darwin-arm64: $(TARGET_DARWIN_ARM64)
-darwin-x86_64: $(TARGET_DARWIN_X86)
+macosx: $(TARGET_DARWIN_ARM64)
 linux: $(TARGET_LINUX)
 windows: $(TARGET_WINDOWS)
-all-platforms: darwin-arm64 darwin-x86_64 linux windows
+all-platforms: macosx linux windows
 
 # ── Build rules ───────────────────────────────────────────────────
 
@@ -131,11 +121,6 @@ $(TARGET_DARWIN_ARM64): $(PLUGIN_SRC) $(GRF_SRCS) $(STPLUGIN_SRC)
 	$(DARWIN_ARM64_CC) $(DARWIN_ARM64_CFLAGS) -c $(STPLUGIN_SRC) -o stplugin.darwin-arm64.o
 	$(DARWIN_ARM64_CXX) $(DARWIN_ARM64_CXXFLAGS) $(DARWIN_ARM64_LDFLAGS) -o $@ $(PLUGIN_SRC) $(GRF_SRCS) stplugin.darwin-arm64.o
 	rm -f stplugin.darwin-arm64.o
-
-$(TARGET_DARWIN_X86): $(PLUGIN_SRC) $(GRF_SRCS) $(STPLUGIN_SRC)
-	$(DARWIN_X86_CC) $(DARWIN_X86_CFLAGS) -c $(STPLUGIN_SRC) -o stplugin.darwin-x86_64.o
-	$(DARWIN_X86_CXX) $(DARWIN_X86_CXXFLAGS) $(DARWIN_X86_LDFLAGS) -o $@ $(PLUGIN_SRC) $(GRF_SRCS) stplugin.darwin-x86_64.o
-	rm -f stplugin.darwin-x86_64.o
 
 $(TARGET_LINUX): $(PLUGIN_SRC) $(GRF_SRCS) $(STPLUGIN_SRC)
 	$(LINUX_CC) $(LINUX_CFLAGS) -c $(STPLUGIN_SRC) -o stplugin.linux.o
@@ -148,5 +133,5 @@ $(TARGET_WINDOWS): $(PLUGIN_SRC) $(GRF_SRCS) $(STPLUGIN_SRC)
 	rm -f stplugin.windows.o
 
 clean:
-	rm -f $(TARGET_DARWIN_ARM64) $(TARGET_DARWIN_X86) $(TARGET_LINUX) $(TARGET_WINDOWS)
+	rm -f $(TARGET_DARWIN_ARM64) $(TARGET_LINUX) $(TARGET_WINDOWS)
 	rm -f stplugin.*.o

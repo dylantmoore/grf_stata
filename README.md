@@ -131,10 +131,9 @@ See `help` for each command for complete stored results.
 
 | Platform | Binary |
 |----------|--------|
-| macOS ARM64 (Apple Silicon) | `grf_plugin.darwin-arm64.plugin` |
-| macOS x86_64 (Intel) | `grf_plugin.darwin-x86_64.plugin` |
-| Linux x86_64 | `grf_plugin.linux-x86_64.plugin` |
-| Windows x86_64 | `grf_plugin.windows-x86_64.plugin` |
+| macOS (Apple Silicon) | `grf_plugin_macosx.plugin` |
+| Linux x86_64 | `grf_plugin_unix.plugin` |
+| Windows x86_64 | `grf_plugin_windows.plugin` |
 
 ## References
 

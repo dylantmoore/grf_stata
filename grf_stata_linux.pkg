@@ -55,4 +55,4 @@ F grf_tune.ado
 F grf_tune.sthlp
 F grf_rate.ado
 F grf_rate.sthlp
-F grf_plugin.linux-x86_64.plugin
+F grf_plugin_unix.plugin
