@@ -293,6 +293,131 @@ cat("  Number of unique failure times:", length(failure_times), "\n")
 cat("  Prediction matrix:", nrow(output_mat), "x", ncol(output_mat), "\n")
 
 # ============================================================
+# 7. CAUSAL FOREST: ATE TARGET SAMPLES
+# ============================================================
+cat("\n=== Causal ATE Target Samples ===\n")
+
+# Use the causal forest (cf) fitted in section 2
+# Reuse the same X, Y, W, cf objects from section 2
+
+# ATE (treated)
+ate_treated <- average_treatment_effect(cf, target.sample = "treated")
+ate_treated_df <- data.frame(estimate = ate_treated[1], std.err = ate_treated[2])
+save_csv(ate_treated_df, "causal_ate_treated")
+cat("  ATE (treated):", ate_treated[1], "(SE:", ate_treated[2], ")\n")
+
+# ATE (control)
+ate_control <- average_treatment_effect(cf, target.sample = "control")
+ate_control_df <- data.frame(estimate = ate_control[1], std.err = ate_control[2])
+save_csv(ate_control_df, "causal_ate_control")
+cat("  ATE (control):", ate_control[1], "(SE:", ate_control[2], ")\n")
+
+# ATE (overlap)
+ate_overlap <- average_treatment_effect(cf, target.sample = "overlap")
+ate_overlap_df <- data.frame(estimate = ate_overlap[1], std.err = ate_overlap[2])
+save_csv(ate_overlap_df, "causal_ate_overlap")
+cat("  ATE (overlap):", ate_overlap[1], "(SE:", ate_overlap[2], ")\n")
+
+# ============================================================
+# 8. CAUSAL FOREST: AVERAGE PARTIAL EFFECT (continuous W)
+# ============================================================
+cat("\n=== Average Partial Effect ===\n")
+
+# APE requires continuous treatment — create a new forest
+n_ape <- 500
+set.seed(42)
+X_ape <- matrix(rnorm(n_ape * p), n_ape, p)
+colnames(X_ape) <- paste0("x", 1:p)
+W_cont <- rnorm(n_ape)
+Y_cont <- 2 * X_ape[, 1] + X_ape[, 1] * W_cont + 0.5 * rnorm(n_ape)
+
+# Save APE input data
+ape_input_df <- data.frame(X_ape, y = Y_cont, w = W_cont)
+save_csv(ape_input_df, "causal_ape_input")
+
+cf_cont <- causal_forest(X_ape, Y_cont, W_cont,
+  num.trees = 2000,
+  seed = 42,
+  honesty = TRUE,
+  min.node.size = 5
+)
+
+ape <- average_partial_effect(cf_cont)
+ape_df <- data.frame(estimate = ape[1], std.err = ape[2])
+save_csv(ape_df, "causal_ape")
+cat("  APE:", ape[1], "(SE:", ape[2], ")\n")
+
+# ============================================================
+# 9. CAUSAL FOREST: BLP WITH EXPLICIT VCOV TYPES
+# ============================================================
+cat("\n=== BLP with HC0 and HC3 ===\n")
+
+# BLP with HC0
+blp_hc0 <- best_linear_projection(cf, X, vcov.type = "HC0")
+blp_hc0_df <- data.frame(
+  variable = c("intercept", paste0("x", 1:p)),
+  estimate = blp_hc0[, 1],
+  std.error = blp_hc0[, 2],
+  t.value = blp_hc0[, 3],
+  p.value = blp_hc0[, 4]
+)
+save_csv(blp_hc0_df, "causal_blp_hc0")
+cat("  BLP HC0 intercept:", blp_hc0[1, 1], "\n")
+
+# BLP with HC3
+blp_hc3 <- best_linear_projection(cf, X, vcov.type = "HC3")
+blp_hc3_df <- data.frame(
+  variable = c("intercept", paste0("x", 1:p)),
+  estimate = blp_hc3[, 1],
+  std.error = blp_hc3[, 2],
+  t.value = blp_hc3[, 3],
+  p.value = blp_hc3[, 4]
+)
+save_csv(blp_hc3_df, "causal_blp_hc3")
+cat("  BLP HC3 intercept:", blp_hc3[1, 1], "\n")
+
+# ============================================================
+# 10. CAUSAL FOREST: DR SCORES
+# ============================================================
+cat("\n=== DR Scores ===\n")
+
+scores <- get_scores(cf)
+scores_df <- data.frame(score = as.vector(scores))
+save_csv(scores_df, "causal_scores")
+cat("  Mean DR score:", mean(scores), "\n")
+cat("  SD DR score:", sd(scores), "\n")
+
+# ============================================================
+# 11. SURVIVAL FOREST: EXPECTED SURVIVAL TIME
+# ============================================================
+cat("\n=== Expected Survival Time ===\n")
+
+# Compute E[T|X] via trapezoidal integration of survival curves
+pred_sf_full <- predict(sf)
+surv_times <- sf$failure.times
+surv_preds <- pred_sf_full$predictions
+
+# Trapezoidal integration: E[T|X] = integral_0^t_max S(t|X) dt
+# Assume S(0) = 1
+E_T <- apply(surv_preds, 1, function(s) {
+  n_t <- length(surv_times)
+  # First interval [0, t_1]: 0.5 * (1 + S(t_1)) * t_1
+  area <- 0.5 * (1 + s[1]) * surv_times[1]
+  # Subsequent intervals
+  if (n_t > 1) {
+    for (j in 2:n_t) {
+      area <- area + 0.5 * (s[j - 1] + s[j]) * (surv_times[j] - surv_times[j - 1])
+    }
+  }
+  area
+})
+
+expected_surv_df <- data.frame(expected_time = E_T)
+save_csv(expected_surv_df, "survival_expected")
+cat("  Mean E[T|X]:", mean(E_T), "\n")
+cat("  SD E[T|X]:", sd(E_T), "\n")
+
+# ============================================================
 # Summary
 # ============================================================
 cat("\n=== Reference Data Summary ===\n")

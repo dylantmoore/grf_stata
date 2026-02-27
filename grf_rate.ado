@@ -1,7 +1,8 @@
 *! grf_rate.ado -- RATE (Rank-Weighted Average Treatment Effect)
-*! Version 0.1.0
+*! Version 0.2.0
 *! Evaluates treatment prioritization rules
 *! Implements AUTOC and QINI from Yadlowsky, Fleming, Shah, Brunskill, Wager (2021)
+*! Supports compliance.score for instrumental forest RATE evaluation
 *! Note: Full R name is rank_average_treatment_effect; shortened for Stata's
 *!       32-character command name limit.
 
@@ -14,6 +15,7 @@ program define grf_rate, rclass
             Quantiles(numlist >0 <=1)   ///
             BOOTstrap(integer 200)      ///
             CATEvar(varname numeric)    ///
+            COMPliancescore(varname numeric) ///
             SEED(integer -1)            ///
         ]
 
@@ -64,6 +66,11 @@ program define grf_rate, rclass
     confirm numeric variable `tauvar'
     confirm numeric variable `priorities'
 
+    /* ---- Validate compliance score if specified ---- */
+    if "`compliancescore'" != "" {
+        confirm numeric variable `compliancescore'
+    }
+
     /* ---- Compute AIPW doubly-robust scores ----
      *
      * R's rank_average_treatment_effect uses DR scores, not raw CATE.
@@ -100,6 +107,9 @@ program define grf_rate, rclass
     markout `touse' `tauvar' `priorities'
     if `use_dr' {
         markout `touse' `depvar' `treatvar' `yhatvar' `whatvar'
+    }
+    if "`compliancescore'" != "" {
+        markout `touse' `compliancescore'
     }
     quietly count if `touse'
     local n_use = r(N)
@@ -138,6 +148,16 @@ program define grf_rate, rclass
         local score_label "raw CATE"
     }
 
+    /* ---- Apply compliance score weighting if specified ---- */
+    local use_compliance 0
+    if "`compliancescore'" != "" {
+        local use_compliance 1
+        tempvar cscore_wt
+        quietly gen double `cscore_wt' = `scorevar' * `compliancescore' if `touse'
+        local scorevar "`cscore_wt'"
+        local score_label "`score_label' (compliance-weighted)"
+    }
+
     /* ---- Set seed if requested ---- */
     if `seed' >= 0 {
         set seed `seed'
@@ -157,6 +177,9 @@ program define grf_rate, rclass
     display as text "Priorities variable:   " as result "`priorities'"
     display as text "CATE variable:         " as result "`tauvar'"
     display as text "Scoring:               " as result "`score_label'"
+    if "`compliancescore'" != "" {
+        display as text "Compliance score:      " as result "`compliancescore'"
+    }
     display as text "Observations:          " as result `n_use'
     display as text "Bootstrap reps:        " as result `bootstrap'
     display as text "Quantile grid points:  " as result `n_quantiles'
@@ -384,4 +407,7 @@ program define grf_rate, rclass
     return local  target        "`target'"
     return local  priorities    "`priorities'"
     return local  catevar       "`tauvar'"
+    if "`compliancescore'" != "" {
+        return local compliance_score_var "`compliancescore'"
+    }
 end

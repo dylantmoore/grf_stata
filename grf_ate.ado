@@ -1,11 +1,12 @@
 *! grf_ate.ado -- Average Treatment Effect (AIPW) from causal forest
-*! Version 0.1.0
+*! Version 0.2.0
 *! Computes doubly-robust ATE from grf_causal_forest ereturn results
+*! Supports target.sample: all, treated, control, overlap
 
 program define grf_ate, rclass
     version 14.0
 
-    syntax [if] [in]
+    syntax [if] [in] [, TARGETsample(string)]
 
     /* ---- Verify causal forest results exist ---- */
     if "`e(cmd)'" != "grf_causal_forest" {
@@ -18,6 +19,17 @@ program define grf_ate, rclass
     local tauvar    "`e(predict_var)'"
     local yhatvar   "`e(yhat_var)'"
     local whatvar   "`e(what_var)'"
+
+    /* ---- Default and validate target.sample ---- */
+    if "`targetsample'" == "" {
+        local targetsample "all"
+    }
+    if "`targetsample'" != "all" & "`targetsample'" != "treated" ///
+        & "`targetsample'" != "control" & "`targetsample'" != "overlap" {
+        display as error ///
+            "target.sample must be one of: all, treated, control, overlap"
+        exit 198
+    }
 
     /* ---- Confirm required variables exist ---- */
     foreach v in depvar treatvar tauvar yhatvar whatvar {
@@ -62,11 +74,41 @@ program define grf_ate, rclass
         gen double `dr_score' = `tauvar' + (`w_resid' / `w_resid_var') * `y_resid' if `touse'
     }
 
-    /* Compute ATE and SE */
-    quietly summarize `dr_score' if `touse'
-    local ate    = r(mean)
-    local dr_sd  = r(sd)
-    local se     = `dr_sd' / sqrt(`n_use')
+    /* ---- Compute weights based on target.sample ---- */
+    tempvar tsweight
+    if "`targetsample'" == "all" {
+        quietly gen double `tsweight' = 1 if `touse'
+    }
+    else if "`targetsample'" == "treated" {
+        quietly gen double `tsweight' = `treatvar' if `touse'
+    }
+    else if "`targetsample'" == "control" {
+        quietly gen double `tsweight' = (1 - `treatvar') if `touse'
+    }
+    else if "`targetsample'" == "overlap" {
+        quietly gen double `tsweight' = `whatvar' * (1 - `whatvar') if `touse'
+    }
+
+    /* Check that weights have positive sum */
+    quietly summarize `tsweight' if `touse'
+    local sum_wt = r(sum)
+    if `sum_wt' < 1e-12 {
+        display as error "sum of target.sample weights is zero"
+        exit 498
+    }
+
+    /* Compute weighted ATE and SE */
+    tempvar wt_dr
+    quietly gen double `wt_dr' = `tsweight' * `dr_score' if `touse'
+    quietly summarize `wt_dr' if `touse'
+    local ate = r(sum) / `sum_wt'
+
+    /* SE: sqrt( sum(w_i^2 * (Gamma_i - ATE)^2) ) / sum(w_i) */
+    tempvar wt_dev_sq
+    quietly gen double `wt_dev_sq' = ///
+        `tsweight'^2 * (`dr_score' - `ate')^2 if `touse'
+    quietly summarize `wt_dev_sq' if `touse'
+    local se = sqrt(r(sum)) / `sum_wt'
 
     /* 95% CI and p-value (normal approximation) */
     local ci_lower = `ate' - invnormal(0.975) * `se'
@@ -80,6 +122,7 @@ program define grf_ate, rclass
     display as text "{hline 60}"
     display as text "Outcome variable:      " as result "`depvar'"
     display as text "Treatment variable:    " as result "`treatvar'"
+    display as text "Target sample:         " as result "`targetsample'"
     display as text "Observations:          " as result `n_use'
     display as text "{hline 60}"
     display as text ""
@@ -103,4 +146,5 @@ program define grf_ate, rclass
     return scalar ci_upper = `ci_upper'
     return scalar pvalue   = `pvalue'
     return scalar N        = `n_use'
+    return local  target_sample "`targetsample'"
 end

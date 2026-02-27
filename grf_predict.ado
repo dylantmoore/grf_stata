@@ -70,6 +70,7 @@ program define grf_predict, rclass
         local instrvar        "`e(instrument)'"
         local do_stabilize    = e(stabilize_splits)
         local reduced_form_wt = e(reduced_form_wt)
+        if missing(`reduced_form_wt') local reduced_form_wt 0
     }
 
     if "`forest_type'" == "survival" {
@@ -77,6 +78,7 @@ program define grf_predict, rclass
         local statusvar   "`e(statusvar)'"
         local n_output_sv = e(n_output)
         local pred_type   = e(pred_type)
+        if missing(`pred_type') local pred_type 0
     }
 
     if "`forest_type'" == "quantile" {
@@ -87,6 +89,42 @@ program define grf_predict, rclass
     if "`forest_type'" == "probability" {
         local n_classes = e(n_classes)
     }
+
+    if "`forest_type'" == "causal_survival" {
+        local treatvar      "`e(treatvar)'"
+        local timevar       "`e(timevar)'"
+        local statusvar     "`e(statusvar)'"
+        local cs_horizon    = e(horizon)
+        local cs_target     = e(target)
+        local do_stabilize  = e(stabilize)
+    }
+
+    if "`forest_type'" == "multi_causal" {
+        local depvar        "`e(depvar)'"
+        local n_treat       = e(n_treat)
+        local treatvars     "`e(treatvars)'"
+        local do_stabilize  = e(stabilize)
+    }
+
+    if "`forest_type'" == "multi_regression" {
+        local n_outcomes    = e(n_outcomes)
+        local depvars       "`e(depvars)'"
+    }
+
+    if "`forest_type'" == "ll_regression" {
+        local enable_ll_split    = e(enable_ll_split)
+        local ll_lambda          = e(ll_lambda)
+        local ll_weight_penalty  = e(ll_weight_penalty)
+        local ll_split_cutoff    = e(ll_split_cutoff)
+    }
+
+    if "`forest_type'" == "lm_forest" {
+        local regvars        "`e(regvars)'"
+        local n_regressors   = e(n_regressors)
+        local do_stabilize   = e(stabilize)
+    }
+
+    /* boosted_regression: no extra e() results needed */
 
     /* ================================================================
      * Step 2: Validate current dataset
@@ -118,9 +156,11 @@ program define grf_predict, rclass
      * Step 3: Handle replace and create output variable(s)
      * ================================================================ */
 
-    if "`forest_type'" == "regression" | ///
-       "`forest_type'" == "causal"     | ///
-       "`forest_type'" == "instrumental" {
+    if "`forest_type'" == "regression"      | ///
+       "`forest_type'" == "causal"           | ///
+       "`forest_type'" == "instrumental"     | ///
+       "`forest_type'" == "causal_survival"  | ///
+       "`forest_type'" == "ll_regression" {
 
         /* Single output variable */
         if "`replace'" != "" {
@@ -162,6 +202,46 @@ program define grf_predict, rclass
             confirm new variable `varname'
             quietly gen double `varname' = .
         }
+    }
+    else if "`forest_type'" == "multi_causal" {
+        /* Per-arm output: stub_t1, stub_t2, ... */
+        forvalues j = 1/`n_treat' {
+            local varname `generate'_t`j'
+            if "`replace'" != "" {
+                capture drop `varname'
+            }
+            confirm new variable `varname'
+            quietly gen double `varname' = .
+        }
+    }
+    else if "`forest_type'" == "multi_regression" {
+        /* Per-outcome output: stub_y1, stub_y2, ... */
+        forvalues j = 1/`n_outcomes' {
+            local varname `generate'_y`j'
+            if "`replace'" != "" {
+                capture drop `varname'
+            }
+            confirm new variable `varname'
+            quietly gen double `varname' = .
+        }
+    }
+    else if "`forest_type'" == "lm_forest" {
+        /* Per-coefficient output: stub_1, stub_2, ... */
+        forvalues j = 1/`n_regressors' {
+            local varname `generate'_`j'
+            if "`replace'" != "" {
+                capture drop `varname'
+            }
+            confirm new variable `varname'
+            quietly gen double `varname' = .
+        }
+    }
+    else if "`forest_type'" == "boosted_regression" {
+        /* Single output variable -- but predict not supported */
+        display as error "grf_predict does not support boosted_regression forests"
+        display as error "the C++ plugin only supports OOB predictions for boosted regression;"
+        display as error "predict mode (on new data) is not available for this forest type"
+        exit 198
     }
     else {
         display as error "forest type `forest_type' is not yet supported for predict"
@@ -396,64 +476,772 @@ program define grf_predict, rclass
     }
 
     /* ----------------------------------------------------------------
-     * QUANTILE FOREST predict (stub -- not yet supported)
+     * QUANTILE FOREST predict
+     * ----------------------------------------------------------------
+     * Pass: X1..Xp Y_copy out_q10 out_q25 ...
+     * The quantile CSV tells the plugin which quantiles to estimate.
      * ---------------------------------------------------------------- */
     else if "`forest_type'" == "quantile" {
-        display as error "grf_predict does not yet support quantile forests"
-        display as error "this feature is planned for a future version"
 
-        /* Clean up output variables we already created */
+        display as text "Predicting with quantile forest ..."
+
+        /* Build comma-separated quantile list for the plugin */
+        local quantile_csv ""
+        local first 1
+        foreach q of local quantiles {
+            if `first' {
+                local quantile_csv "`q'"
+                local first 0
+            }
+            else {
+                local quantile_csv "`quantile_csv',`q'"
+            }
+        }
+
+        /* Build output varlist */
+        local output_vars ""
         foreach q of local quantiles {
             local qint = round(`q' * 100)
-            capture drop `generate'_q`qint'
+            local output_vars `output_vars' `generate'_q`qint'
         }
-        exit 198
+
+        /* Create tempvar copy of depvar with missing filled for test obs */
+        tempvar y_safe
+        quietly gen double `y_safe' = `depvar'
+        quietly replace `y_safe' = 0 if _n > `n_train' & missing(`y_safe')
+
+        /* Call plugin */
+        plugin call grf_plugin `indepvars' `y_safe' `output_vars', ///
+            "quantile"                                              ///
+            "`n_trees'"                                             ///
+            "`seed'"                                                ///
+            "`mtry'"                                                ///
+            "`min_node'"                                            ///
+            "`samplefrac'"                                          ///
+            "`do_honesty'"                                          ///
+            "`honestyfrac'"                                         ///
+            "`do_honesty_prune'"                                    ///
+            "`alpha'"                                               ///
+            "`imbalancepenalty'"                                     ///
+            "`cigroupsize'"                                         ///
+            "`numthreads'"                                          ///
+            "0"                                                     ///
+            "`n_train'"                                             ///
+            "`nindep'"                                              ///
+            "1"                                                     ///
+            "0"                                                     ///
+            "0"                                                     ///
+            "`n_quantiles'"                                         ///
+            "`quantile_csv'"
+
+        /* Clear predictions for training obs */
+        foreach q of local quantiles {
+            local qint = round(`q' * 100)
+            quietly replace `generate'_q`qint' = . if _n <= `n_train'
+        }
     }
 
     /* ----------------------------------------------------------------
-     * PROBABILITY FOREST predict (stub -- not yet supported)
+     * PROBABILITY FOREST predict
+     * ----------------------------------------------------------------
+     * Pass: X1..Xp Y_copy out_c0 out_c1 ...
      * ---------------------------------------------------------------- */
     else if "`forest_type'" == "probability" {
-        display as error "grf_predict does not yet support probability forests"
-        display as error "this feature is planned for a future version"
 
-        /* Clean up output variables we already created */
+        display as text "Predicting with probability forest ..."
+
+        /* Build output varlist */
+        local output_vars ""
         forvalues c = 0/`=`n_classes'-1' {
-            capture drop `generate'_c`c'
+            local output_vars `output_vars' `generate'_c`c'
         }
-        exit 198
+
+        /* Create tempvar copy of depvar with missing filled for test obs */
+        tempvar y_safe
+        quietly gen double `y_safe' = `depvar'
+        quietly replace `y_safe' = 0 if _n > `n_train' & missing(`y_safe')
+
+        /* Call plugin */
+        plugin call grf_plugin `indepvars' `y_safe' `output_vars', ///
+            "probability"                                           ///
+            "`n_trees'"                                             ///
+            "`seed'"                                                ///
+            "`mtry'"                                                ///
+            "`min_node'"                                            ///
+            "`samplefrac'"                                          ///
+            "`do_honesty'"                                          ///
+            "`honestyfrac'"                                         ///
+            "`do_honesty_prune'"                                    ///
+            "`alpha'"                                               ///
+            "`imbalancepenalty'"                                     ///
+            "`cigroupsize'"                                         ///
+            "`numthreads'"                                          ///
+            "0"                                                     ///
+            "`n_train'"                                             ///
+            "`nindep'"                                              ///
+            "1"                                                     ///
+            "0"                                                     ///
+            "0"                                                     ///
+            "`n_classes'"                                            ///
+            "`n_classes'"
+
+        /* Clear predictions for training obs */
+        forvalues c = 0/`=`n_classes'-1' {
+            quietly replace `generate'_c`c' = . if _n <= `n_train'
+        }
     }
 
     /* ----------------------------------------------------------------
-     * INSTRUMENTAL FOREST predict (stub -- not yet supported)
+     * INSTRUMENTAL FOREST predict
+     * ----------------------------------------------------------------
+     * Like causal but with 3 nuisance regressions: Y~X, W~X, Z~X
      * ---------------------------------------------------------------- */
     else if "`forest_type'" == "instrumental" {
-        display as error "grf_predict does not yet support instrumental forests"
-        display as error "this feature is planned for a future version"
 
-        capture drop `generate'
-        exit 198
+        /* --- Step 1: Nuisance model Y ~ X (OOB on training only) --- */
+        display as text "Step 1/4: Nuisance model Y ~ X (OOB on training) ..."
+
+        tempvar yhat_pred
+        quietly gen double `yhat_pred' = .
+
+        plugin call grf_plugin `indepvars' `depvar' `yhat_pred' ///
+            if _n <= `n_train',                                  ///
+            "regression"                                          ///
+            "`n_trees'"                                           ///
+            "`seed'"                                              ///
+            "`mtry'"                                              ///
+            "`min_node'"                                          ///
+            "`samplefrac'"                                        ///
+            "`do_honesty'"                                        ///
+            "`honestyfrac'"                                       ///
+            "`do_honesty_prune'"                                  ///
+            "`alpha'"                                             ///
+            "`imbalancepenalty'"                                   ///
+            "`cigroupsize'"                                       ///
+            "`numthreads'"                                        ///
+            "0"                                                   ///
+            "0"                                                   ///
+            "`nindep'"                                            ///
+            "1"                                                   ///
+            "0"                                                   ///
+            "0"                                                   ///
+            "1"
+
+        /* --- Step 2: Nuisance model W ~ X (OOB on training only) --- */
+        display as text "Step 2/4: Nuisance model W ~ X (OOB on training) ..."
+
+        tempvar what_pred
+        quietly gen double `what_pred' = .
+
+        plugin call grf_plugin `indepvars' `treatvar' `what_pred' ///
+            if _n <= `n_train',                                    ///
+            "regression"                                           ///
+            "`n_trees'"                                            ///
+            "`seed'"                                               ///
+            "`mtry'"                                               ///
+            "`min_node'"                                           ///
+            "`samplefrac'"                                         ///
+            "`do_honesty'"                                         ///
+            "`honestyfrac'"                                        ///
+            "`do_honesty_prune'"                                   ///
+            "`alpha'"                                              ///
+            "`imbalancepenalty'"                                    ///
+            "`cigroupsize'"                                        ///
+            "`numthreads'"                                         ///
+            "0"                                                    ///
+            "0"                                                    ///
+            "`nindep'"                                             ///
+            "1"                                                    ///
+            "0"                                                    ///
+            "0"                                                    ///
+            "1"
+
+        /* --- Step 3: Nuisance model Z ~ X (OOB on training only) --- */
+        display as text "Step 3/4: Nuisance model Z ~ X (OOB on training) ..."
+
+        tempvar zhat_pred
+        quietly gen double `zhat_pred' = .
+
+        plugin call grf_plugin `indepvars' `instrvar' `zhat_pred' ///
+            if _n <= `n_train',                                    ///
+            "regression"                                           ///
+            "`n_trees'"                                            ///
+            "`seed'"                                               ///
+            "`mtry'"                                               ///
+            "`min_node'"                                           ///
+            "`samplefrac'"                                         ///
+            "`do_honesty'"                                         ///
+            "`honestyfrac'"                                        ///
+            "`do_honesty_prune'"                                   ///
+            "`alpha'"                                              ///
+            "`imbalancepenalty'"                                    ///
+            "`cigroupsize'"                                        ///
+            "`numthreads'"                                         ///
+            "0"                                                    ///
+            "0"                                                    ///
+            "`nindep'"                                             ///
+            "1"                                                    ///
+            "0"                                                    ///
+            "0"                                                    ///
+            "1"
+
+        /* --- Step 4: Center and run instrumental forest --- */
+        display as text "Step 4/4: Instrumental forest on centered data (with predict) ..."
+
+        tempvar y_centered w_centered z_centered
+
+        /* Center training obs using OOB estimates */
+        quietly gen double `y_centered' = `depvar'    - `yhat_pred' if _n <= `n_train'
+        quietly gen double `w_centered' = `treatvar'  - `what_pred' if _n <= `n_train'
+        quietly gen double `z_centered' = `instrvar'  - `zhat_pred' if _n <= `n_train'
+
+        /* For test obs: fill with 0 placeholder */
+        quietly replace `y_centered' = 0 if _n > `n_train'
+        quietly replace `w_centered' = 0 if _n > `n_train'
+        quietly replace `z_centered' = 0 if _n > `n_train'
+
+        /* Call instrumental forest with n_train */
+        plugin call grf_plugin `indepvars' `y_centered' `w_centered' ///
+            `z_centered' `generate',                                  ///
+            "instrumental"                                            ///
+            "`n_trees'"                                               ///
+            "`seed'"                                                  ///
+            "`mtry'"                                                  ///
+            "`min_node'"                                              ///
+            "`samplefrac'"                                            ///
+            "`do_honesty'"                                            ///
+            "`honestyfrac'"                                           ///
+            "`do_honesty_prune'"                                      ///
+            "`alpha'"                                                 ///
+            "`imbalancepenalty'"                                       ///
+            "`cigroupsize'"                                           ///
+            "`numthreads'"                                            ///
+            "0"                                                       ///
+            "`n_train'"                                               ///
+            "`nindep'"                                                ///
+            "1"                                                       ///
+            "1"                                                       ///
+            "1"                                                       ///
+            "1"                                                       ///
+            "`reduced_form_wt'"                                       ///
+            "`do_stabilize'"
+
+        /* Clear predictions for training obs */
+        quietly replace `generate' = . if _n <= `n_train'
     }
 
     /* ----------------------------------------------------------------
-     * SURVIVAL FOREST predict (stub -- not yet supported)
+     * SURVIVAL FOREST predict
+     * ----------------------------------------------------------------
+     * Pass: X1..Xp time_safe status_safe out_s1 ... out_sN
      * ---------------------------------------------------------------- */
     else if "`forest_type'" == "survival" {
-        display as error "grf_predict does not yet support survival forests"
-        display as error "this feature is planned for a future version"
 
-        /* Clean up output variables we already created */
+        display as text "Predicting with survival forest ..."
+
+        /* Build output varlist */
+        local output_vars ""
         forvalues j = 1/`n_output_sv' {
-            capture drop `generate'_s`j'
+            local output_vars `output_vars' `generate'_s`j'
         }
-        exit 198
+
+        /* Create tempvar copies of time and status, fill test obs with 0 */
+        tempvar time_safe status_safe
+        quietly gen double `time_safe' = `timevar'
+        quietly replace `time_safe' = 0 if _n > `n_train' & missing(`time_safe')
+        quietly gen double `status_safe' = `statusvar'
+        quietly replace `status_safe' = 0 if _n > `n_train' & missing(`status_safe')
+
+        /* Remap user-facing predtype to C++ convention (inverted) */
+        local cpp_predtype = 1 - `pred_type'
+
+        /* Call plugin: X1..Xp time_safe status_safe out1..outN */
+        plugin call grf_plugin `indepvars' `time_safe' `status_safe' `output_vars', ///
+            "survival"                                                               ///
+            "`n_trees'"                                                              ///
+            "`seed'"                                                                 ///
+            "`mtry'"                                                                 ///
+            "`min_node'"                                                             ///
+            "`samplefrac'"                                                           ///
+            "`do_honesty'"                                                           ///
+            "`honestyfrac'"                                                          ///
+            "`do_honesty_prune'"                                                     ///
+            "`alpha'"                                                                ///
+            "`imbalancepenalty'"                                                      ///
+            "`cigroupsize'"                                                          ///
+            "`numthreads'"                                                           ///
+            "0"                                                                      ///
+            "`n_train'"                                                              ///
+            "`nindep'"                                                               ///
+            "1"                                                                      ///
+            "0"                                                                      ///
+            "0"                                                                      ///
+            "`n_output_sv'"                                                          ///
+            "0"                                                                      ///
+            "`cpp_predtype'"
+
+        /* Clear predictions for training obs */
+        forvalues j = 1/`n_output_sv' {
+            quietly replace `generate'_s`j' = . if _n <= `n_train'
+        }
+    }
+
+    /* ----------------------------------------------------------------
+     * CAUSAL SURVIVAL FOREST predict
+     * ----------------------------------------------------------------
+     * Nuisance pipeline:
+     *   Step 1: W.hat via regression forest on training
+     *   Step 2: W.centered = W - W.hat; compute simplified IPCW numer/denom
+     *   Step 3: Call "causal_survival" plugin
+     * Variable order: X1..Xp time w_centered status numer denom output
+     * ---------------------------------------------------------------- */
+    else if "`forest_type'" == "causal_survival" {
+
+        /* --- Step 1: Propensity W.hat via regression on training --- */
+        display as text "Step 1/3: Propensity model W ~ X (OOB on training) ..."
+
+        tempvar what_pred
+        quietly gen double `what_pred' = .
+
+        plugin call grf_plugin `indepvars' `treatvar' `what_pred' ///
+            if _n <= `n_train',                                    ///
+            "regression"                                           ///
+            "`n_trees'"                                            ///
+            "`seed'"                                               ///
+            "`mtry'"                                               ///
+            "`min_node'"                                           ///
+            "`samplefrac'"                                         ///
+            "`do_honesty'"                                         ///
+            "`honestyfrac'"                                        ///
+            "`do_honesty_prune'"                                   ///
+            "`alpha'"                                              ///
+            "`imbalancepenalty'"                                    ///
+            "`cigroupsize'"                                        ///
+            "`numthreads'"                                         ///
+            "0"                                                    ///
+            "0"                                                    ///
+            "`nindep'"                                             ///
+            "1"                                                    ///
+            "0"                                                    ///
+            "0"                                                    ///
+            "1"
+
+        /* --- Step 2: Center W and compute simplified IPCW nuisance --- */
+        display as text "Step 2/3: Centering W and computing nuisance estimates ..."
+
+        tempvar w_cent cs_numer cs_denom time_safe status_safe
+
+        /* Center treatment on training, fill test with 0 */
+        quietly gen double `w_cent' = `treatvar' - `what_pred' if _n <= `n_train'
+        quietly replace `w_cent' = 0 if _n > `n_train'
+
+        /* Simplified IPCW nuisance (same as estimation command) */
+        quietly gen double `cs_numer' = `w_cent' * `statusvar' * ///
+            min(`timevar', `cs_horizon') if _n <= `n_train'
+        quietly replace `cs_numer' = 0 if _n > `n_train'
+
+        quietly gen double `cs_denom' = 1 if _n <= `n_train'
+        quietly replace `cs_denom' = 0 if _n > `n_train'
+
+        /* Tempvar copies of time and status, fill test with 0 */
+        quietly gen double `time_safe' = `timevar'
+        quietly replace `time_safe' = 0 if _n > `n_train' & missing(`time_safe')
+        quietly gen double `status_safe' = `statusvar'
+        quietly replace `status_safe' = 0 if _n > `n_train' & missing(`status_safe')
+
+        /* --- Step 3: Causal survival forest with predict --- */
+        display as text "Step 3/3: Causal survival forest (with predict) ..."
+
+        plugin call grf_plugin `indepvars' `time_safe' `w_cent' ///
+            `status_safe' `cs_numer' `cs_denom' `generate',      ///
+            "causal_survival"                                     ///
+            "`n_trees'"                                           ///
+            "`seed'"                                              ///
+            "`mtry'"                                              ///
+            "`min_node'"                                          ///
+            "`samplefrac'"                                        ///
+            "`do_honesty'"                                        ///
+            "`honestyfrac'"                                       ///
+            "`do_honesty_prune'"                                  ///
+            "`alpha'"                                             ///
+            "`imbalancepenalty'"                                    ///
+            "`cigroupsize'"                                       ///
+            "`numthreads'"                                        ///
+            "0"                                                   ///
+            "`n_train'"                                           ///
+            "`nindep'"                                            ///
+            "1"                                                   ///
+            "1"                                                   ///
+            "0"                                                   ///
+            "1"                                                   ///
+            "`do_stabilize'"                                      ///
+            "`=`nindep'+3'"                                       ///
+            "`=`nindep'+4'"                                       ///
+            "`=`nindep'+2'"                                       ///
+            "`cs_target'"
+
+        /* Clear predictions for training obs */
+        quietly replace `generate' = . if _n <= `n_train'
+    }
+
+    /* ----------------------------------------------------------------
+     * MULTI-ARM CAUSAL FOREST predict
+     * ----------------------------------------------------------------
+     * Nuisance pipeline (same pattern as estimation):
+     *   Step 1: Y.hat via regression on training
+     *   Step 2: For each arm k, W_k.hat via regression on training
+     *   Step 3: Center Y.c = Y - Y.hat, W_k.c = W_k - W_k.hat
+     *   Step 4: Call "multi_arm_causal" plugin
+     * ---------------------------------------------------------------- */
+    else if "`forest_type'" == "multi_causal" {
+
+        local total_steps = `n_treat' + 2
+
+        /* --- Step 1: Nuisance model Y ~ X (OOB on training) --- */
+        display as text "Step 1/`total_steps': Nuisance model Y ~ X (OOB on training) ..."
+
+        tempvar yhat_pred
+        quietly gen double `yhat_pred' = .
+
+        plugin call grf_plugin `indepvars' `depvar' `yhat_pred' ///
+            if _n <= `n_train',                                  ///
+            "regression"                                          ///
+            "`n_trees'"                                           ///
+            "`seed'"                                              ///
+            "`mtry'"                                              ///
+            "`min_node'"                                          ///
+            "`samplefrac'"                                        ///
+            "`do_honesty'"                                        ///
+            "`honestyfrac'"                                       ///
+            "`do_honesty_prune'"                                  ///
+            "`alpha'"                                             ///
+            "`imbalancepenalty'"                                   ///
+            "`cigroupsize'"                                       ///
+            "`numthreads'"                                        ///
+            "0"                                                   ///
+            "0"                                                   ///
+            "`nindep'"                                            ///
+            "1"                                                   ///
+            "0"                                                   ///
+            "0"                                                   ///
+            "1"
+
+        /* --- Step 2: For each treatment arm, W_k ~ X --- */
+        local w_centered_vars ""
+        forvalues j = 1/`n_treat' {
+            local step = `j' + 1
+            local tv : word `j' of `treatvars'
+            display as text "Step `step'/`total_steps': Nuisance model `tv' ~ X (OOB on training) ..."
+
+            tempvar what_`j'
+            quietly gen double `what_`j'' = .
+
+            plugin call grf_plugin `indepvars' `tv' `what_`j'' ///
+                if _n <= `n_train',                              ///
+                "regression"                                     ///
+                "`n_trees'"                                      ///
+                "`seed'"                                         ///
+                "`mtry'"                                         ///
+                "`min_node'"                                     ///
+                "`samplefrac'"                                   ///
+                "`do_honesty'"                                   ///
+                "`honestyfrac'"                                  ///
+                "`do_honesty_prune'"                             ///
+                "`alpha'"                                        ///
+                "`imbalancepenalty'"                               ///
+                "`cigroupsize'"                                  ///
+                "`numthreads'"                                   ///
+                "0"                                              ///
+                "0"                                              ///
+                "`nindep'"                                       ///
+                "1"                                              ///
+                "0"                                              ///
+                "0"                                              ///
+                "1"
+
+            /* Center on training, fill test with 0 */
+            tempvar wc_`j'
+            quietly gen double `wc_`j'' = `tv' - `what_`j'' if _n <= `n_train'
+            quietly replace `wc_`j'' = 0 if _n > `n_train'
+            local w_centered_vars `w_centered_vars' `wc_`j''
+        }
+
+        /* --- Center Y --- */
+        tempvar y_centered
+        quietly gen double `y_centered' = `depvar' - `yhat_pred' if _n <= `n_train'
+        quietly replace `y_centered' = 0 if _n > `n_train'
+
+        /* --- Build output varlist --- */
+        local output_vars ""
+        forvalues j = 1/`n_treat' {
+            local output_vars `output_vars' `generate'_t`j'
+        }
+
+        /* --- Step final: Multi-arm causal forest with predict --- */
+        local final_step = `n_treat' + 2
+        display as text "Step `final_step'/`final_step': Multi-arm causal forest (with predict) ..."
+
+        plugin call grf_plugin `indepvars' `y_centered' `w_centered_vars' `output_vars', ///
+            "multi_arm_causal"                                                            ///
+            "`n_trees'"                                                                   ///
+            "`seed'"                                                                      ///
+            "`mtry'"                                                                      ///
+            "`min_node'"                                                                  ///
+            "`samplefrac'"                                                                ///
+            "`do_honesty'"                                                                ///
+            "`honestyfrac'"                                                               ///
+            "`do_honesty_prune'"                                                          ///
+            "`alpha'"                                                                     ///
+            "`imbalancepenalty'"                                                            ///
+            "`cigroupsize'"                                                               ///
+            "`numthreads'"                                                                ///
+            "0"                                                                           ///
+            "`n_train'"                                                                   ///
+            "`nindep'"                                                                    ///
+            "1"                                                                           ///
+            "`n_treat'"                                                                   ///
+            "0"                                                                           ///
+            "`n_treat'"                                                                   ///
+            "`do_stabilize'"                                                              ///
+            "`n_treat'"
+
+        /* Clear predictions for training obs */
+        forvalues j = 1/`n_treat' {
+            quietly replace `generate'_t`j' = . if _n <= `n_train'
+        }
+    }
+
+    /* ----------------------------------------------------------------
+     * MULTI-REGRESSION FOREST predict
+     * ----------------------------------------------------------------
+     * Pass: X1..Xp Y1_safe Y2_safe ... out_y1 out_y2 ...
+     * ---------------------------------------------------------------- */
+    else if "`forest_type'" == "multi_regression" {
+
+        display as text "Predicting with multi-regression forest ..."
+
+        /* Create tempvar copies of all depvars, fill test obs with 0 */
+        local safe_depvars ""
+        forvalues j = 1/`n_outcomes' {
+            local dv : word `j' of `depvars'
+            tempvar ysafe_`j'
+            quietly gen double `ysafe_`j'' = `dv'
+            quietly replace `ysafe_`j'' = 0 if _n > `n_train' & missing(`ysafe_`j'')
+            local safe_depvars `safe_depvars' `ysafe_`j''
+        }
+
+        /* Build output varlist */
+        local output_vars ""
+        forvalues j = 1/`n_outcomes' {
+            local output_vars `output_vars' `generate'_y`j'
+        }
+
+        /* Call plugin */
+        plugin call grf_plugin `indepvars' `safe_depvars' `output_vars', ///
+            "multi_regression"                                            ///
+            "`n_trees'"                                                   ///
+            "`seed'"                                                      ///
+            "`mtry'"                                                      ///
+            "`min_node'"                                                  ///
+            "`samplefrac'"                                                ///
+            "`do_honesty'"                                                ///
+            "`honestyfrac'"                                               ///
+            "`do_honesty_prune'"                                          ///
+            "`alpha'"                                                     ///
+            "`imbalancepenalty'"                                           ///
+            "`cigroupsize'"                                               ///
+            "`numthreads'"                                                ///
+            "0"                                                           ///
+            "`n_train'"                                                   ///
+            "`nindep'"                                                    ///
+            "`n_outcomes'"                                                ///
+            "0"                                                           ///
+            "0"                                                           ///
+            "`n_outcomes'"                                                ///
+            "`n_outcomes'"
+
+        /* Clear predictions for training obs */
+        forvalues j = 1/`n_outcomes' {
+            quietly replace `generate'_y`j' = . if _n <= `n_train'
+        }
+    }
+
+    /* ----------------------------------------------------------------
+     * LOCAL LINEAR REGRESSION FOREST predict
+     * ----------------------------------------------------------------
+     * Pass: X1..Xp Y_safe output
+     * ---------------------------------------------------------------- */
+    else if "`forest_type'" == "ll_regression" {
+
+        display as text "Predicting with local linear regression forest ..."
+
+        /* Create tempvar copy of depvar with missing filled for test obs */
+        tempvar y_safe
+        quietly gen double `y_safe' = `depvar'
+        quietly replace `y_safe' = 0 if _n > `n_train' & missing(`y_safe')
+
+        /* Call plugin */
+        plugin call grf_plugin `indepvars' `y_safe' `generate', ///
+            "ll_regression"                                      ///
+            "`n_trees'"                                          ///
+            "`seed'"                                             ///
+            "`mtry'"                                             ///
+            "`min_node'"                                         ///
+            "`samplefrac'"                                       ///
+            "`do_honesty'"                                       ///
+            "`honestyfrac'"                                      ///
+            "`do_honesty_prune'"                                 ///
+            "`alpha'"                                            ///
+            "`imbalancepenalty'"                                  ///
+            "`cigroupsize'"                                      ///
+            "`numthreads'"                                       ///
+            "0"                                                  ///
+            "`n_train'"                                          ///
+            "`nindep'"                                           ///
+            "1"                                                  ///
+            "0"                                                  ///
+            "0"                                                  ///
+            "1"                                                  ///
+            "`enable_ll_split'"                                  ///
+            "`ll_lambda'"                                        ///
+            "`ll_weight_penalty'"                                ///
+            "`ll_split_cutoff'"
+
+        /* Clear predictions for training obs */
+        quietly replace `generate' = . if _n <= `n_train'
+    }
+
+    /* ----------------------------------------------------------------
+     * LINEAR MODEL FOREST predict
+     * ----------------------------------------------------------------
+     * Nuisance pipeline (same pattern as estimation):
+     *   Step 1: Y.hat via regression on training using indepvars (xvars)
+     *   Step 2: For each regressor k, W_k.hat via regression on training
+     *   Step 3: Center Y.c, W_k.c on training; 0 for test
+     *   Step 4: Call "lm_forest" plugin
+     * ---------------------------------------------------------------- */
+    else if "`forest_type'" == "lm_forest" {
+
+        local total_steps = `n_regressors' + 2
+
+        /* --- Step 1: Nuisance model Y ~ X (OOB on training) --- */
+        display as text "Step 1/`total_steps': Nuisance model Y ~ X (OOB on training) ..."
+
+        tempvar yhat_pred
+        quietly gen double `yhat_pred' = .
+
+        plugin call grf_plugin `indepvars' `depvar' `yhat_pred' ///
+            if _n <= `n_train',                                  ///
+            "regression"                                          ///
+            "`n_trees'"                                           ///
+            "`seed'"                                              ///
+            "`mtry'"                                              ///
+            "`min_node'"                                          ///
+            "`samplefrac'"                                        ///
+            "`do_honesty'"                                        ///
+            "`honestyfrac'"                                       ///
+            "`do_honesty_prune'"                                  ///
+            "`alpha'"                                             ///
+            "`imbalancepenalty'"                                   ///
+            "`cigroupsize'"                                       ///
+            "`numthreads'"                                        ///
+            "0"                                                   ///
+            "0"                                                   ///
+            "`nindep'"                                            ///
+            "1"                                                   ///
+            "0"                                                   ///
+            "0"                                                   ///
+            "1"
+
+        /* --- Step 2: For each regressor, W_k ~ X --- */
+        local w_centered_vars ""
+        forvalues j = 1/`n_regressors' {
+            local step = `j' + 1
+            local wv : word `j' of `regvars'
+            display as text "Step `step'/`total_steps': Nuisance model `wv' ~ X (OOB on training) ..."
+
+            tempvar what_`j'
+            quietly gen double `what_`j'' = .
+
+            plugin call grf_plugin `indepvars' `wv' `what_`j'' ///
+                if _n <= `n_train',                              ///
+                "regression"                                     ///
+                "`n_trees'"                                      ///
+                "`seed'"                                         ///
+                "`mtry'"                                         ///
+                "`min_node'"                                     ///
+                "`samplefrac'"                                   ///
+                "`do_honesty'"                                   ///
+                "`honestyfrac'"                                  ///
+                "`do_honesty_prune'"                             ///
+                "`alpha'"                                        ///
+                "`imbalancepenalty'"                               ///
+                "`cigroupsize'"                                  ///
+                "`numthreads'"                                   ///
+                "0"                                              ///
+                "0"                                              ///
+                "`nindep'"                                       ///
+                "1"                                              ///
+                "0"                                              ///
+                "0"                                              ///
+                "1"
+
+            /* Center on training, fill test with 0 */
+            tempvar wc_`j'
+            quietly gen double `wc_`j'' = `wv' - `what_`j'' if _n <= `n_train'
+            quietly replace `wc_`j'' = 0 if _n > `n_train'
+            local w_centered_vars `w_centered_vars' `wc_`j''
+        }
+
+        /* --- Center Y --- */
+        tempvar y_centered
+        quietly gen double `y_centered' = `depvar' - `yhat_pred' if _n <= `n_train'
+        quietly replace `y_centered' = 0 if _n > `n_train'
+
+        /* --- Build output varlist --- */
+        local output_vars ""
+        forvalues j = 1/`n_regressors' {
+            local output_vars `output_vars' `generate'_`j'
+        }
+
+        /* --- Step final: Linear model forest with predict --- */
+        local final_step = `n_regressors' + 2
+        display as text "Step `final_step'/`final_step': Linear model forest (with predict) ..."
+
+        plugin call grf_plugin `indepvars' `y_centered' `w_centered_vars' `output_vars', ///
+            "lm_forest"                                                                   ///
+            "`n_trees'"                                                                   ///
+            "`seed'"                                                                      ///
+            "`mtry'"                                                                      ///
+            "`min_node'"                                                                  ///
+            "`samplefrac'"                                                                ///
+            "`do_honesty'"                                                                ///
+            "`honestyfrac'"                                                               ///
+            "`do_honesty_prune'"                                                          ///
+            "`alpha'"                                                                     ///
+            "`imbalancepenalty'"                                                            ///
+            "`cigroupsize'"                                                               ///
+            "`numthreads'"                                                                ///
+            "0"                                                                           ///
+            "`n_train'"                                                                   ///
+            "`nindep'"                                                                    ///
+            "1"                                                                           ///
+            "`n_regressors'"                                                              ///
+            "0"                                                                           ///
+            "`n_regressors'"                                                              ///
+            "`do_stabilize'"
+
+        /* Clear predictions for training obs */
+        forvalues j = 1/`n_regressors' {
+            quietly replace `generate'_`j' = . if _n <= `n_train'
+        }
     }
 
     /* ================================================================
      * Step 7: Summary statistics
      * ================================================================ */
 
-    if "`forest_type'" == "regression" {
+    if "`forest_type'" == "regression" | "`forest_type'" == "ll_regression" {
 
         quietly summarize `generate' if _n > `n_train'
         local n_pred = r(N)
@@ -473,7 +1261,34 @@ program define grf_predict, rclass
         return local  predict_var "`generate'"
     }
 
-    else if "`forest_type'" == "causal" {
+    else if "`forest_type'" == "causal" | ///
+            "`forest_type'" == "instrumental" {
+
+        quietly summarize `generate' if _n > `n_train'
+        local n_pred = r(N)
+        local pred_mean = r(mean)
+        local pred_sd = r(sd)
+
+        local label = cond("`forest_type'" == "causal", "Causal", "Instrumental")
+        local effect_label = cond("`forest_type'" == "causal", "CATE", "LATE")
+
+        display as text ""
+        display as text "`label' Forest Predictions"
+        display as text "{hline 55}"
+        display as text "`effect_label' predictions:     " as result "`generate'"
+        display as text "  Test obs predicted: " as result `n_pred'
+        display as text "  Mean `effect_label':          " as result %9.4f `pred_mean'
+        display as text "  SD `effect_label':            " as result %9.4f `pred_sd'
+        display as text "{hline 55}"
+        display as text ""
+
+        return scalar N_test    = `n_pred'
+        return scalar mean_cate = `pred_mean'
+        return scalar sd_cate   = `pred_sd'
+        return local  predict_var "`generate'"
+    }
+
+    else if "`forest_type'" == "causal_survival" {
 
         quietly summarize `generate' if _n > `n_train'
         local n_pred = r(N)
@@ -481,7 +1296,7 @@ program define grf_predict, rclass
         local pred_sd = r(sd)
 
         display as text ""
-        display as text "Causal Forest Predictions"
+        display as text "Causal Survival Forest Predictions"
         display as text "{hline 55}"
         display as text "CATE predictions:       " as result "`generate'"
         display as text "  Test obs predicted: " as result `n_pred'
@@ -494,6 +1309,143 @@ program define grf_predict, rclass
         return scalar mean_cate = `pred_mean'
         return scalar sd_cate   = `pred_sd'
         return local  predict_var "`generate'"
+    }
+
+    else if "`forest_type'" == "quantile" {
+
+        display as text ""
+        display as text "Quantile Forest Predictions"
+        display as text "{hline 55}"
+        foreach q of local quantiles {
+            local qint = round(`q' * 100)
+            quietly summarize `generate'_q`qint' if _n > `n_train'
+            local n_pred = r(N)
+            local pred_mean = r(mean)
+            local pred_sd = r(sd)
+            display as text "  q`qint' (`generate'_q`qint'): " ///
+                as result "mean=" %9.4f `pred_mean' " sd=" %9.4f `pred_sd' ///
+                " N=" `n_pred'
+        }
+        display as text "{hline 55}"
+        display as text ""
+
+        /* Return stats for first quantile */
+        local q1 : word 1 of `quantiles'
+        local qint1 = round(`q1' * 100)
+        quietly summarize `generate'_q`qint1' if _n > `n_train'
+        return scalar N_test = r(N)
+        return local  predict_stub "`generate'"
+    }
+
+    else if "`forest_type'" == "probability" {
+
+        display as text ""
+        display as text "Probability Forest Predictions"
+        display as text "{hline 55}"
+        forvalues c = 0/`=`n_classes'-1' {
+            quietly summarize `generate'_c`c' if _n > `n_train'
+            local n_pred = r(N)
+            local pred_mean = r(mean)
+            local pred_sd = r(sd)
+            display as text "  class `c' (`generate'_c`c'): " ///
+                as result "mean=" %9.4f `pred_mean' " sd=" %9.4f `pred_sd' ///
+                " N=" `n_pred'
+        }
+        display as text "{hline 55}"
+        display as text ""
+
+        quietly summarize `generate'_c0 if _n > `n_train'
+        return scalar N_test = r(N)
+        return local  predict_stub "`generate'"
+    }
+
+    else if "`forest_type'" == "survival" {
+
+        display as text ""
+        display as text "Survival Forest Predictions"
+        display as text "{hline 55}"
+        display as text "Predictions: " as result "`generate'_s1 ... `generate'_s`n_output_sv'"
+        quietly summarize `generate'_s1 if _n > `n_train'
+        local n_pred = r(N)
+        display as text "  Test obs predicted: " as result `n_pred'
+        display as text "  (`n_output_sv' columns at evaluated failure times)"
+        quietly summarize `generate'_s1 if _n > `n_train'
+        display as text "  First col mean:     " as result %9.4f r(mean)
+        display as text "  First col SD:       " as result %9.4f r(sd)
+        display as text "{hline 55}"
+        display as text ""
+
+        return scalar N_test = `n_pred'
+        return local  predict_stub "`generate'"
+    }
+
+    else if "`forest_type'" == "multi_causal" {
+
+        display as text ""
+        display as text "Multi-Arm Causal Forest Predictions"
+        display as text "{hline 55}"
+        forvalues j = 1/`n_treat' {
+            local tv : word `j' of `treatvars'
+            quietly summarize `generate'_t`j' if _n > `n_train'
+            local n_pred = r(N)
+            local pred_mean = r(mean)
+            local pred_sd = r(sd)
+            display as text "  arm `j' (`tv'): " ///
+                as result "mean=" %9.4f `pred_mean' " sd=" %9.4f `pred_sd' ///
+                " N=" `n_pred'
+        }
+        display as text "{hline 55}"
+        display as text ""
+
+        quietly summarize `generate'_t1 if _n > `n_train'
+        return scalar N_test = r(N)
+        return local  predict_stub "`generate'"
+    }
+
+    else if "`forest_type'" == "multi_regression" {
+
+        display as text ""
+        display as text "Multi-Regression Forest Predictions"
+        display as text "{hline 55}"
+        forvalues j = 1/`n_outcomes' {
+            local dv : word `j' of `depvars'
+            quietly summarize `generate'_y`j' if _n > `n_train'
+            local n_pred = r(N)
+            local pred_mean = r(mean)
+            local pred_sd = r(sd)
+            display as text "  outcome `j' (`dv'): " ///
+                as result "mean=" %9.4f `pred_mean' " sd=" %9.4f `pred_sd' ///
+                " N=" `n_pred'
+        }
+        display as text "{hline 55}"
+        display as text ""
+
+        quietly summarize `generate'_y1 if _n > `n_train'
+        return scalar N_test = r(N)
+        return local  predict_stub "`generate'"
+    }
+
+    else if "`forest_type'" == "lm_forest" {
+
+        display as text ""
+        display as text "Linear Model Forest Predictions"
+        display as text "{hline 55}"
+        forvalues j = 1/`n_regressors' {
+            local wv : word `j' of `regvars'
+            quietly summarize `generate'_`j' if _n > `n_train'
+            local n_pred = r(N)
+            local pred_mean = r(mean)
+            local pred_sd = r(sd)
+            display as text "  coef `j' (`wv'): " ///
+                as result "mean=" %9.4f `pred_mean' " sd=" %9.4f `pred_sd' ///
+                " N=" `n_pred'
+        }
+        display as text "{hline 55}"
+        display as text ""
+
+        quietly summarize `generate'_1 if _n > `n_train'
+        return scalar N_test = r(N)
+        return local  predict_stub "`generate'"
     }
 
     return local  forest_type "`forest_type'"
