@@ -57,6 +57,12 @@ program define grf_predict, rclass
     if missing(`imbalancepenalty') local imbalancepenalty  = 0.0
     if missing(`cigroupsize')      local cigroupsize      = 1
 
+    /* Read allow_missing_x from e() -- inherit from estimation */
+    local allow_missing_x = e(allow_missing_x)
+    if missing(`allow_missing_x') {
+        local allow_missing_x 1
+    }
+
     /* Forest-type-specific e() results */
     local depvar      "`e(depvar)'"
 
@@ -268,8 +274,7 @@ program define grf_predict, rclass
     if ( inlist("`c(os)'", "MacOSX") | strpos("`c(machine_type)'", "Mac") ) local c_os_ macosx
     else local c_os_: di lower("`c(os)'")
 
-    cap program drop grf_plugin
-    program grf_plugin, plugin using("grf_plugin_`c_os_'.plugin")
+    capture program grf_plugin, plugin using("grf_plugin_`c_os_'.plugin")
 
     /* ================================================================
      * Step 6: Dispatch by forest type
@@ -284,7 +289,7 @@ program define grf_predict, rclass
      * The plugin reads from these tempvar copies.  Tempvars are
      * automatically dropped when the program exits.
      *
-     * argv layout (common 20 args):
+     * argv layout (common 23 args):
      *   [0]  forest_type
      *   [1]  num_trees
      *   [2]  seed
@@ -305,6 +310,9 @@ program define grf_predict, rclass
      *   [17] n_w
      *   [18] n_z
      *   [19] n_output
+     *   [20] allow_missing_x (1=MIA enabled)
+     *   [21] cluster_col_idx (0=no clustering)
+     *   [22] weight_col_idx (0=no weights)
      */
 
     local nindep : word count `indepvars'
@@ -350,7 +358,10 @@ program define grf_predict, rclass
             "1"                                                  ///
             "0"                                                  ///
             "0"                                                  ///
-            "1"
+            "1"                                                  ///
+            "`allow_missing_x'"                                  ///
+            "0"                                                  ///
+            "0"
 
         /* Clear predictions for training obs (they got OOB predictions,
          * but the user only asked for test predictions) */
@@ -401,7 +412,10 @@ program define grf_predict, rclass
             "1"                                                   ///
             "0"                                                   ///
             "0"                                                   ///
-            "1"
+            "1"                                                   ///
+            "`allow_missing_x'"                                   ///
+            "0"                                                   ///
+            "0"
 
         /* --- Step 2: Nuisance model W ~ X (OOB on training only) --- */
         display as text "Step 2/3: Nuisance model W ~ X (OOB on training) ..."
@@ -430,7 +444,10 @@ program define grf_predict, rclass
             "1"                                                    ///
             "0"                                                    ///
             "0"                                                    ///
-            "1"
+            "1"                                                    ///
+            "`allow_missing_x'"                                    ///
+            "0"                                                    ///
+            "0"
 
         /* --- Step 3: Center Y and W, then run causal forest --- */
         display as text "Step 3/3: Causal forest on centered data (with predict) ..."
@@ -469,6 +486,9 @@ program define grf_predict, rclass
             "1"                                                                   ///
             "0"                                                                   ///
             "1"                                                                   ///
+            "`allow_missing_x'"                                                   ///
+            "0"                                                                   ///
+            "0"                                                                   ///
             "`do_stabilize'"
 
         /* Clear predictions for training obs */
@@ -532,6 +552,9 @@ program define grf_predict, rclass
             "0"                                                     ///
             "0"                                                     ///
             "`n_quantiles'"                                         ///
+            "`allow_missing_x'"                                     ///
+            "0"                                                     ///
+            "0"                                                     ///
             "`quantile_csv'"
 
         /* Clear predictions for training obs */
@@ -583,6 +606,9 @@ program define grf_predict, rclass
             "0"                                                     ///
             "0"                                                     ///
             "`n_classes'"                                            ///
+            "`allow_missing_x'"                                     ///
+            "0"                                                     ///
+            "0"                                                     ///
             "`n_classes'"
 
         /* Clear predictions for training obs */
@@ -625,7 +651,10 @@ program define grf_predict, rclass
             "1"                                                   ///
             "0"                                                   ///
             "0"                                                   ///
-            "1"
+            "1"                                                   ///
+            "`allow_missing_x'"                                   ///
+            "0"                                                   ///
+            "0"
 
         /* --- Step 2: Nuisance model W ~ X (OOB on training only) --- */
         display as text "Step 2/4: Nuisance model W ~ X (OOB on training) ..."
@@ -654,7 +683,10 @@ program define grf_predict, rclass
             "1"                                                    ///
             "0"                                                    ///
             "0"                                                    ///
-            "1"
+            "1"                                                    ///
+            "`allow_missing_x'"                                    ///
+            "0"                                                    ///
+            "0"
 
         /* --- Step 3: Nuisance model Z ~ X (OOB on training only) --- */
         display as text "Step 3/4: Nuisance model Z ~ X (OOB on training) ..."
@@ -683,7 +715,10 @@ program define grf_predict, rclass
             "1"                                                    ///
             "0"                                                    ///
             "0"                                                    ///
-            "1"
+            "1"                                                    ///
+            "`allow_missing_x'"                                    ///
+            "0"                                                    ///
+            "0"
 
         /* --- Step 4: Center and run instrumental forest --- */
         display as text "Step 4/4: Instrumental forest on centered data (with predict) ..."
@@ -723,6 +758,9 @@ program define grf_predict, rclass
             "1"                                                       ///
             "1"                                                       ///
             "1"                                                       ///
+            "`allow_missing_x'"                                       ///
+            "0"                                                       ///
+            "0"                                                       ///
             "`reduced_form_wt'"                                       ///
             "`do_stabilize'"
 
@@ -777,6 +815,9 @@ program define grf_predict, rclass
             "0"                                                                      ///
             "0"                                                                      ///
             "`n_output_sv'"                                                          ///
+            "`allow_missing_x'"                                                      ///
+            "0"                                                                      ///
+            "0"                                                                      ///
             "0"                                                                      ///
             "`cpp_predtype'"
 
@@ -824,7 +865,10 @@ program define grf_predict, rclass
             "1"                                                    ///
             "0"                                                    ///
             "0"                                                    ///
-            "1"
+            "1"                                                    ///
+            "`allow_missing_x'"                                    ///
+            "0"                                                    ///
+            "0"
 
         /* --- Step 2: Center W and compute simplified IPCW nuisance --- */
         display as text "Step 2/3: Centering W and computing nuisance estimates ..."
@@ -874,6 +918,9 @@ program define grf_predict, rclass
             "1"                                                   ///
             "0"                                                   ///
             "1"                                                   ///
+            "`allow_missing_x'"                                   ///
+            "0"                                                   ///
+            "0"                                                   ///
             "`do_stabilize'"                                      ///
             "`=`nindep'+3'"                                       ///
             "`=`nindep'+4'"                                       ///
@@ -924,7 +971,10 @@ program define grf_predict, rclass
             "1"                                                   ///
             "0"                                                   ///
             "0"                                                   ///
-            "1"
+            "1"                                                   ///
+            "`allow_missing_x'"                                   ///
+            "0"                                                   ///
+            "0"
 
         /* --- Step 2: For each treatment arm, W_k ~ X --- */
         local w_centered_vars ""
@@ -957,7 +1007,10 @@ program define grf_predict, rclass
                 "1"                                              ///
                 "0"                                              ///
                 "0"                                              ///
-                "1"
+                "1"                                              ///
+                "`allow_missing_x'"                              ///
+                "0"                                              ///
+                "0"
 
             /* Center on training, fill test with 0 */
             tempvar wc_`j'
@@ -1002,6 +1055,9 @@ program define grf_predict, rclass
             "`n_treat'"                                                                   ///
             "0"                                                                           ///
             "`n_treat'"                                                                   ///
+            "`allow_missing_x'"                                                           ///
+            "0"                                                                           ///
+            "0"                                                                           ///
             "`do_stabilize'"                                                              ///
             "`n_treat'"
 
@@ -1058,6 +1114,9 @@ program define grf_predict, rclass
             "0"                                                           ///
             "0"                                                           ///
             "`n_outcomes'"                                                ///
+            "`allow_missing_x'"                                           ///
+            "0"                                                           ///
+            "0"                                                           ///
             "`n_outcomes'"
 
         /* Clear predictions for training obs */
@@ -1102,6 +1161,9 @@ program define grf_predict, rclass
             "0"                                                  ///
             "0"                                                  ///
             "1"                                                  ///
+            "`allow_missing_x'"                                  ///
+            "0"                                                  ///
+            "0"                                                  ///
             "`enable_ll_split'"                                  ///
             "`ll_lambda'"                                        ///
             "`ll_weight_penalty'"                                ///
@@ -1151,7 +1213,10 @@ program define grf_predict, rclass
             "1"                                                   ///
             "0"                                                   ///
             "0"                                                   ///
-            "1"
+            "1"                                                   ///
+            "`allow_missing_x'"                                   ///
+            "0"                                                   ///
+            "0"
 
         /* --- Step 2: For each regressor, W_k ~ X --- */
         local w_centered_vars ""
@@ -1184,7 +1249,10 @@ program define grf_predict, rclass
                 "1"                                              ///
                 "0"                                              ///
                 "0"                                              ///
-                "1"
+                "1"                                              ///
+                "`allow_missing_x'"                              ///
+                "0"                                              ///
+                "0"
 
             /* Center on training, fill test with 0 */
             tempvar wc_`j'
@@ -1229,6 +1297,9 @@ program define grf_predict, rclass
             "`n_regressors'"                                                              ///
             "0"                                                                           ///
             "`n_regressors'"                                                              ///
+            "`allow_missing_x'"                                                           ///
+            "0"                                                                           ///
+            "0"                                                                           ///
             "`do_stabilize'"
 
         /* Clear predictions for training obs */

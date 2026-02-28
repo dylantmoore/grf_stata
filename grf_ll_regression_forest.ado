@@ -1,8 +1,12 @@
 *! grf_ll_regression_forest.ado -- Local Linear Regression Forest via grf C++ library
-*! Version 0.1.0
+*! Version 0.2.0
 *! Implements Friedberg et al. (2021) ll_regression_forest()
 *!
 *! Like regression forest but with local linear correction at prediction time.
+*!
+*! Known limitation: R's ll.split.variables accepts a vector of variable
+*! indices to restrict which variables are used for splitting. Stata's
+*! llsplit option is a boolean toggle (splits on all variables when enabled).
 
 program define grf_ll_regression_forest, eclass
     version 14.0
@@ -26,9 +30,14 @@ program define grf_ll_regression_forest, eclass
             REPlace                            ///
             VARGenerate(name)                  ///
             LLSplit                            ///
+            LLSplitVars(varlist numeric)       ///
             LLLambda(real 0.1)                 ///
             LLWeightpenalty                    ///
             LLCutoff(integer 0)               ///
+            noMIA                              ///
+            CLuster(varname numeric)           ///
+            WEIghts(varname numeric)           ///
+            EQUALizeclusterweights             ///
         ]
 
     /* ---- Parse honesty ---- */
@@ -65,6 +74,42 @@ program define grf_ll_regression_forest, eclass
 
     local ll_split_cutoff `llcutoff'
 
+    /* ---- Parse MIA ---- */
+    local allow_missing_x 1
+    if "`mia'" == "nomia" {
+        local allow_missing_x 0
+    }
+
+    /* ---- Parse cluster ---- */
+    local cluster_col_idx 0
+    if "`cluster'" != "" {
+        local cluster_var `cluster'
+    }
+
+    /* ---- Parse weights ---- */
+    local weight_col_idx 0
+    if "`weights'" != "" {
+        local weight_var `weights'
+    }
+
+    /* ---- Parse equalize cluster weights ---- */
+    if "`equalizeclusterweights'" != "" {
+        if "`cluster'" == "" {
+            display as error "equalizeclusterweights requires cluster() option"
+            exit 198
+        }
+        /* Compute 1/cluster_size for each observation */
+        tempvar _eq_clsize _eq_wt
+        quietly bysort `cluster': gen long `_eq_clsize' = _N if `touse'
+        quietly gen double `_eq_wt' = 1.0 / `_eq_clsize' if `touse'
+        /* Combine with existing weights if any */
+        if "`weight_var'" != "" {
+            quietly replace `_eq_wt' = `_eq_wt' * `weight_var' if `touse'
+        }
+        /* Use equalized weights as the weight variable */
+        local weight_var `_eq_wt'
+    }
+
     /* ---- Handle replace ---- */
     if "`replace'" != "" {
         capture drop `generate'
@@ -83,8 +128,48 @@ program define grf_ll_regression_forest, eclass
         exit 198
     }
 
+    /* ---- Parse ll.split.variables ----
+     * LLSplitVars(varlist) specifies which X variables are used for LL splitting.
+     * Convert variable names to 0-indexed column positions in the X matrix.
+     * If LLSplit is specified without LLSplitVars, all variables are used (default). */
+    local ll_split_vars_str ""
+    if "`llsplitvars'" != "" {
+        foreach sv of local llsplitvars {
+            local found 0
+            local pos 0
+            foreach xv of local indepvars {
+                if "`sv'" == "`xv'" {
+                    local found 1
+                    local ll_split_vars_str "`ll_split_vars_str' `pos'"
+                }
+                local pos = `pos' + 1
+            }
+            if !`found' {
+                display as error "llsplitvars: variable `sv' not found in predictor list"
+                exit 198
+            }
+        }
+        local ll_split_vars_str = trim("`ll_split_vars_str'")
+        /* Enable LL split if splitvars are specified */
+        if "`llsplit'" == "" {
+            local enable_ll_split 1
+        }
+    }
+
     /* ---- Mark sample ---- */
-    marksample touse
+    if `allow_missing_x' {
+        marksample touse, novarlist
+        markout `touse' `depvar'
+        if "`cluster_var'" != "" {
+            markout `touse' `cluster_var'
+        }
+        if "`weight_var'" != "" {
+            markout `touse' `weight_var'
+        }
+    }
+    else {
+        marksample touse
+    }
     quietly count if `touse'
     local n_use = r(N)
 
@@ -132,8 +217,7 @@ program define grf_ll_regression_forest, eclass
     if ( inlist("`c(os)'", "MacOSX") | strpos("`c(machine_type)'", "Mac") ) local c_os_ macosx
     else local c_os_: di lower("`c(os)'")
 
-    cap program drop grf_plugin
-    program grf_plugin, plugin using("grf_plugin_`c_os_'.plugin")
+    capture program grf_plugin, plugin using("grf_plugin_`c_os_'.plugin")
 
     /* ---- Build output varlist ---- */
     local output_vars `generate'
@@ -141,16 +225,30 @@ program define grf_ll_regression_forest, eclass
         local output_vars `generate' `vargenerate'
     }
 
+    /* ---- Build extra vars for cluster/weight ---- */
+    local extra_vars ""
+    local n_data_before = `nindep' + 1
+    if "`cluster_var'" != "" {
+        local extra_vars `extra_vars' `cluster_var'
+        local cluster_col_idx = `n_data_before' + 1
+        local n_data_before = `n_data_before' + 1
+    }
+    if "`weight_var'" != "" {
+        local extra_vars `extra_vars' `weight_var'
+        local weight_col_idx = `n_data_before' + 1
+    }
+
     /* ---- Call plugin ----
      *
-     * Variable order: X1..Xp Y out1 [out2]
+     * Variable order: X1..Xp Y [cluster] [weight] out1 [out2]
      * argv: forest_type num_trees seed mtry min_node_size sample_fraction
      *       honesty honesty_fraction honesty_prune alpha imbalance_penalty
      *       ci_group_size num_threads estimate_variance compute_oob
      *       n_x n_y n_w n_z n_output
+     *       allow_missing_x cluster_col_idx weight_col_idx
      *       enable_ll_split ll_lambda ll_weight_penalty ll_split_cutoff
      */
-    plugin call grf_plugin `indepvars' `depvar' `output_vars' ///
+    plugin call grf_plugin `indepvars' `depvar' `extra_vars' `output_vars' ///
         if `touse',                                            ///
         "ll_regression"                                        ///
         "`ntrees'"                                             ///
@@ -172,10 +270,14 @@ program define grf_ll_regression_forest, eclass
         "0"                                                    ///
         "0"                                                    ///
         "`n_output'"                                           ///
+        "`allow_missing_x'"                                    ///
+        "`cluster_col_idx'"                                    ///
+        "`weight_col_idx'"                                     ///
         "`enable_ll_split'"                                    ///
         "`lllambda'"                                           ///
         "`ll_weight_penalty'"                                  ///
-        "`ll_split_cutoff'"
+        "`ll_split_cutoff'"                                    ///
+        "`ll_split_vars_str'"
 
     /* ---- Store results ---- */
     ereturn clear
@@ -196,12 +298,19 @@ program define grf_ll_regression_forest, eclass
     ereturn scalar ll_split_cutoff    = `ll_split_cutoff'
     ereturn scalar enable_ll_split    = `enable_ll_split'
     ereturn local  cmd           "grf_ll_regression_forest"
+    ereturn scalar allow_missing_x = `allow_missing_x'
     ereturn local  forest_type   "ll_regression"
     ereturn local  depvar        "`depvar'"
     ereturn local  indepvars     "`indepvars'"
     ereturn local  predict_var   "`generate'"
     if `do_est_var' {
         ereturn local variance_var "`vargenerate'"
+    }
+    if "`cluster_var'" != "" {
+        ereturn local cluster_var "`cluster_var'"
+    }
+    if "`weight_var'" != "" {
+        ereturn local weight_var "`weight_var'"
     }
 
     /* ---- Summary stats ---- */

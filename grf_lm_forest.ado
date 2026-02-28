@@ -21,13 +21,22 @@ program define grf_lm_forest, eclass
             noHONesty                          ///
             HONestyfrac(real 0.5)              ///
             noHONestyprune                     ///
-            noSTABilizesplits                  ///
+            STABilizesplits                    ///
             ALPha(real 0.05)                   ///
             IMBalancepenalty(real 0.0)          ///
             CIGroupsize(integer 1)             ///
             NUMThreads(integer 0)              ///
             ESTIMATEVariance                   ///
             REPlace                            ///
+            noMIA                              ///
+            YHATinput(varname numeric)          ///
+            WHATinput(varlist numeric)          ///
+            YHATgenerate(name)                 ///
+            WHATgenerate(namelist)              ///
+            GRADientweights(numlist)            ///
+            CLuster(varname numeric)           ///
+            WEIghts(varname numeric)           ///
+            EQUALizeclusterweights             ///
         ]
 
     /* ---- Parse honesty ---- */
@@ -43,12 +52,23 @@ program define grf_lm_forest, eclass
     }
 
     /* ---- Parse stabilize_splits ---- */
-    /* Note: R's lm_forest defaults stabilize.splits = FALSE, but we keep
-     * the consistent noSTABilizesplits interface (default ON). Users who
-     * want to match R's default should specify nostabilizesplits. */
-    local do_stabilize 1
-    if "`stabilizesplits'" == "nostabilizesplits" {
-        local do_stabilize 0
+    /* R's lm_forest defaults stabilize.splits = FALSE.
+     * STABilizesplits is opt-in (default OFF). */
+    local do_stabilize 0
+    if "`stabilizesplits'" != "" {
+        local do_stabilize 1
+    }
+
+    /* ---- Parse gradient_weights ---- */
+    /* R's lm_forest accepts gradient.weights as a vector of weights for
+     * gradient computation. If not specified, an empty vector is passed
+     * (C++ default behavior). */
+    local gradient_weights_str ""
+    if "`gradientweights'" != "" {
+        /* Validate: should have exactly n_regressors * n_y weights */
+        local n_gw : word count `gradientweights'
+        /* Convert numlist to space-separated string for argv */
+        local gradient_weights_str "`gradientweights'"
     }
 
     /* ---- Parse estimate_variance ---- */
@@ -58,6 +78,42 @@ program define grf_lm_forest, eclass
         if `cigroupsize' < 2 {
             local cigroupsize 2
         }
+    }
+
+    /* ---- Parse MIA ---- */
+    local allow_missing_x 1
+    if "`mia'" == "nomia" {
+        local allow_missing_x 0
+    }
+
+    /* ---- Parse cluster ---- */
+    local cluster_col_idx 0
+    if "`cluster'" != "" {
+        local cluster_var `cluster'
+    }
+
+    /* ---- Parse weights ---- */
+    local weight_col_idx 0
+    if "`weights'" != "" {
+        local weight_var `weights'
+    }
+
+    /* ---- Parse equalize cluster weights ---- */
+    if "`equalizeclusterweights'" != "" {
+        if "`cluster'" == "" {
+            display as error "equalizeclusterweights requires cluster() option"
+            exit 198
+        }
+        /* Compute 1/cluster_size for each observation */
+        tempvar _eq_clsize _eq_wt
+        quietly bysort `cluster': gen long `_eq_clsize' = _N if `touse'
+        quietly gen double `_eq_wt' = 1.0 / `_eq_clsize' if `touse'
+        /* Combine with existing weights if any */
+        if "`weight_var'" != "" {
+            quietly replace `_eq_wt' = `_eq_wt' * `weight_var' if `touse'
+        }
+        /* Use equalized weights as the weight variable */
+        local weight_var `_eq_wt'
     }
 
     /* ---- Parse varlist: depvar regressor1 [regressor2 ...] ---- */
@@ -89,8 +145,23 @@ program define grf_lm_forest, eclass
     }
 
     /* ---- Mark sample ---- */
-    marksample touse
-    markout `touse' `xvarlist'
+    if `allow_missing_x' {
+        marksample touse, novarlist
+        markout `touse' `depvar'
+        foreach wv of local regvars {
+            markout `touse' `wv'
+        }
+        if "`cluster_var'" != "" {
+            markout `touse' `cluster_var'
+        }
+        if "`weight_var'" != "" {
+            markout `touse' `weight_var'
+        }
+    }
+    else {
+        marksample touse
+        markout `touse' `xvarlist'
+    }
     quietly count if `touse'
     local n_use = r(N)
 
@@ -138,8 +209,7 @@ program define grf_lm_forest, eclass
     if ( inlist("`c(os)'", "MacOSX") | strpos("`c(machine_type)'", "Mac") ) local c_os_ macosx
     else local c_os_: di lower("`c(os)'")
 
-    cap program drop grf_plugin
-    program grf_plugin, plugin using("grf_plugin_`c_os_'.plugin")
+    capture program grf_plugin, plugin using("grf_plugin_`c_os_'.plugin")
 
     /* ==== Nuisance estimation pipeline ====
      *
@@ -152,73 +222,131 @@ program define grf_lm_forest, eclass
 
     local total_steps = `n_regressors' + 2
 
-    /* ---- Step 1: Fit Y.hat ---- */
-    display as text "Step 1/`total_steps': Fitting nuisance model Y ~ X ..."
-    tempvar yhat
-    quietly gen double `yhat' = .
-    plugin call grf_plugin `xvarlist' `depvar' `yhat' ///
-        if `touse',                                    ///
-        "regression"                                   ///
-        "`nuisancetrees'"                              ///
-        "`seed'"                                       ///
-        "`mtry'"                                       ///
-        "`minnodesize'"                                ///
-        "`samplefrac'"                                 ///
-        "`do_honesty'"                                 ///
-        "`honestyfrac'"                                ///
-        "`do_honesty_prune'"                           ///
-        "`alpha'"                                      ///
-        "`imbalancepenalty'"                            ///
-        "`cigroupsize'"                                ///
-        "`numthreads'"                                 ///
-        "0"                                            ///
-        "0"                                            ///
-        "`nindep'"                                     ///
-        "1"                                            ///
-        "0"                                            ///
-        "0"                                            ///
-        "1"
-
-    /* ---- Step 2: Fit W_k.hat for each regressor ---- */
-    local w_centered_vars ""
-    forvalues j = 1/`n_regressors' {
-        local step = `j' + 1
-        local wv : word `j' of `regvars'
-        display as text "Step `step'/`total_steps': Fitting nuisance model `wv' ~ X ..."
-
-        tempvar what_`j'
-        quietly gen double `what_`j'' = .
-        plugin call grf_plugin `xvarlist' `wv' `what_`j'' ///
-            if `touse',                                     ///
-            "regression"                                    ///
-            "`nuisancetrees'"                               ///
-            "`seed'"                                        ///
-            "`mtry'"                                        ///
-            "`minnodesize'"                                 ///
-            "`samplefrac'"                                  ///
-            "`do_honesty'"                                  ///
-            "`honestyfrac'"                                 ///
-            "`do_honesty_prune'"                            ///
-            "`alpha'"                                       ///
-            "`imbalancepenalty'"                             ///
-            "`cigroupsize'"                                 ///
-            "`numthreads'"                                  ///
-            "0"                                             ///
-            "0"                                             ///
-            "`nindep'"                                      ///
-            "1"                                             ///
-            "0"                                             ///
-            "0"                                             ///
-            "1"
-
-        tempvar wc_`j'
-        quietly gen double `wc_`j'' = `wv' - `what_`j'' if `touse'
-        local w_centered_vars `w_centered_vars' `wc_`j''
+    /* Nuisance column indices (regression: X + Y = nindep + 1 data cols) */
+    local _nuis_data_cols = `nindep' + 1
+    local _nuis_cluster_idx 0
+    local _nuis_weight_idx 0
+    if "`cluster_var'" != "" {
+        local _nuis_cluster_idx = `_nuis_data_cols' + 1
+    }
+    if "`weight_var'" != "" {
+        local _nuis_offset = 0
+        if "`cluster_var'" != "" {
+            local _nuis_offset = 1
+        }
+        local _nuis_weight_idx = `_nuis_data_cols' + `_nuis_offset' + 1
     }
 
-    /* ---- Center Y ---- */
-    tempvar y_centered
-    quietly gen double `y_centered' = `depvar' - `yhat' if `touse'
+    /* Build extra_vars for nuisance calls */
+    local _nuis_extra_vars ""
+    if "`cluster_var'" != "" {
+        local _nuis_extra_vars `_nuis_extra_vars' `cluster_var'
+    }
+    if "`weight_var'" != "" {
+        local _nuis_extra_vars `_nuis_extra_vars' `weight_var'
+    }
+
+    if "`yhatinput'" != "" & "`whatinput'" != "" {
+        /* ---- User-supplied nuisance estimates ---- */
+        local n_whatinput : word count `whatinput'
+        if `n_whatinput' != `n_regressors' {
+            display as error "whatinput() must contain exactly `n_regressors' variables"
+            exit 198
+        }
+        display as text "Using user-supplied nuisance estimates"
+        tempvar yhat
+        quietly gen double `yhat' = `yhatinput' if `touse'
+        local w_centered_vars ""
+        forvalues j = 1/`n_regressors' {
+            local wv : word `j' of `regvars'
+            local wiv : word `j' of `whatinput'
+            tempvar what_`j' wc_`j'
+            quietly gen double `what_`j'' = `wiv' if `touse'
+            quietly gen double `wc_`j'' = `wv' - `what_`j'' if `touse'
+            local w_centered_vars `w_centered_vars' `wc_`j''
+        }
+        tempvar y_centered
+        quietly gen double `y_centered' = `depvar' - `yhat' if `touse'
+    }
+    else if "`yhatinput'" != "" | "`whatinput'" != "" {
+        display as error "both yhatinput() and whatinput() must be specified together"
+        exit 198
+    }
+    else {
+        /* ---- Step 1: Fit Y.hat ---- */
+        display as text "Step 1/`total_steps': Fitting nuisance model Y ~ X ..."
+        tempvar yhat
+        quietly gen double `yhat' = .
+        plugin call grf_plugin `xvarlist' `depvar' `_nuis_extra_vars' `yhat' ///
+            if `touse',                                    ///
+            "regression"                                   ///
+            "`nuisancetrees'"                              ///
+            "`seed'"                                       ///
+            "`mtry'"                                       ///
+            "`minnodesize'"                                ///
+            "`samplefrac'"                                 ///
+            "`do_honesty'"                                 ///
+            "`honestyfrac'"                                ///
+            "`do_honesty_prune'"                           ///
+            "`alpha'"                                      ///
+            "`imbalancepenalty'"                            ///
+            "`cigroupsize'"                                ///
+            "`numthreads'"                                 ///
+            "0"                                            ///
+            "0"                                            ///
+            "`nindep'"                                     ///
+            "1"                                            ///
+            "0"                                            ///
+            "0"                                            ///
+            "1"                                            ///
+            "`allow_missing_x'"                            ///
+            "`_nuis_cluster_idx'"                          ///
+            "`_nuis_weight_idx'"
+
+        /* ---- Step 2: Fit W_k.hat for each regressor ---- */
+        local w_centered_vars ""
+        forvalues j = 1/`n_regressors' {
+            local step = `j' + 1
+            local wv : word `j' of `regvars'
+            display as text "Step `step'/`total_steps': Fitting nuisance model `wv' ~ X ..."
+
+            tempvar what_`j'
+            quietly gen double `what_`j'' = .
+            plugin call grf_plugin `xvarlist' `wv' `_nuis_extra_vars' `what_`j'' ///
+                if `touse',                                     ///
+                "regression"                                    ///
+                "`nuisancetrees'"                               ///
+                "`seed'"                                        ///
+                "`mtry'"                                        ///
+                "`minnodesize'"                                 ///
+                "`samplefrac'"                                  ///
+                "`do_honesty'"                                  ///
+                "`honestyfrac'"                                 ///
+                "`do_honesty_prune'"                            ///
+                "`alpha'"                                       ///
+                "`imbalancepenalty'"                             ///
+                "`cigroupsize'"                                 ///
+                "`numthreads'"                                  ///
+                "0"                                             ///
+                "0"                                             ///
+                "`nindep'"                                      ///
+                "1"                                             ///
+                "0"                                             ///
+                "0"                                             ///
+                "1"                                             ///
+                "`allow_missing_x'"                             ///
+                "`_nuis_cluster_idx'"                           ///
+                "`_nuis_weight_idx'"
+
+            tempvar wc_`j'
+            quietly gen double `wc_`j'' = `wv' - `what_`j'' if `touse'
+            local w_centered_vars `w_centered_vars' `wc_`j''
+        }
+
+        /* ---- Center Y ---- */
+        tempvar y_centered
+        quietly gen double `y_centered' = `depvar' - `yhat' if `touse'
+    }
 
     /* ---- Save nuisance estimates ---- */
     capture drop _grf_lm_yhat
@@ -230,6 +358,29 @@ program define grf_lm_forest, eclass
         capture drop _grf_lm_what`j'
         quietly gen double _grf_lm_what`j' = `what_`j''
         label variable _grf_lm_what`j' "W`j'.hat from nuisance regression (`wv' ~ X)"
+    }
+
+    /* ---- Save user-specified generate variables ---- */
+    if "`yhatgenerate'" != "" {
+        if "`replace'" != "" { capture drop `yhatgenerate' }
+        confirm new variable `yhatgenerate'
+        quietly gen double `yhatgenerate' = `yhat'
+        label variable `yhatgenerate' "Y.hat from nuisance regression (Y ~ X)"
+    }
+    if "`whatgenerate'" != "" {
+        local n_wg : word count `whatgenerate'
+        if `n_wg' != `n_regressors' {
+            display as error "whatgenerate() must contain exactly `n_regressors' names"
+            exit 198
+        }
+        forvalues j = 1/`n_regressors' {
+            local wgn : word `j' of `whatgenerate'
+            if "`replace'" != "" { capture drop `wgn' }
+            confirm new variable `wgn'
+            quietly gen double `wgn' = `what_`j''
+            local wv : word `j' of `regvars'
+            label variable `wgn' "W`j'.hat from nuisance regression (`wv' ~ X)"
+        }
     }
 
     /* ---- Build output varlist ----
@@ -246,42 +397,61 @@ program define grf_lm_forest, eclass
         }
     }
 
+    /* ---- Build extra vars for cluster/weight ---- */
+    local extra_vars ""
+    local n_data_before = `nindep' + 1 + `n_regressors'
+    if "`cluster_var'" != "" {
+        local extra_vars `extra_vars' `cluster_var'
+        local cluster_col_idx = `n_data_before' + 1
+        local n_data_before = `n_data_before' + 1
+    }
+    if "`weight_var'" != "" {
+        local extra_vars `extra_vars' `weight_var'
+        local weight_col_idx = `n_data_before' + 1
+    }
+
     /* ---- Call plugin for linear model forest ----
      *
-     * Variable order: X1..Xp Y.c W1.c W2.c ... out_1 [out_1_var] out_2 [out_2_var] ...
+     * Variable order: X1..Xp Y.c W1.c W2.c ... [cluster] [weight] out_1 [out_1_var] out_2 [out_2_var] ...
      *   n_x = nindep
      *   n_y = 1 (centered outcome)
      *   n_w = n_regressors (centered regressor variables)
      *   n_z = 0
      *   n_output = n_regressors (or n_regressors*2 with variance)
      *
-     * argv[20]: stabilize_splits (0 by default for lm_forest)
+     * argv[20-22]: allow_missing_x, cluster_col_idx, weight_col_idx
+     * argv[23]: stabilize_splits (0 by default for lm_forest)
      */
     local final_step = `n_regressors' + 2
     display as text "Step `final_step'/`final_step': Fitting linear model forest on centered data ..."
-    plugin call grf_plugin `xvarlist' `y_centered' `w_centered_vars' `output_vars' ///
-        if `touse',                                                                 ///
-        "lm_forest"                                                                ///
-        "`ntrees'"                                                                 ///
-        "`seed'"                                                                   ///
-        "`mtry'"                                                                   ///
-        "`minnodesize'"                                                            ///
-        "`samplefrac'"                                                             ///
-        "`do_honesty'"                                                             ///
-        "`honestyfrac'"                                                            ///
-        "`do_honesty_prune'"                                                       ///
-        "`alpha'"                                                                  ///
-        "`imbalancepenalty'"                                                        ///
-        "`cigroupsize'"                                                            ///
-        "`numthreads'"                                                             ///
-        "`do_est_var'"                                                             ///
-        "0"                                                                        ///
-        "`nindep'"                                                                 ///
-        "1"                                                                        ///
-        "`n_regressors'"                                                           ///
-        "0"                                                                        ///
-        "`n_output'"                                                               ///
-        "`do_stabilize'"
+    plugin call grf_plugin `xvarlist' `y_centered' `w_centered_vars' ///
+        `extra_vars' `output_vars'                                    ///
+        if `touse',                                                   ///
+        "lm_forest"                                                  ///
+        "`ntrees'"                                                   ///
+        "`seed'"                                                     ///
+        "`mtry'"                                                     ///
+        "`minnodesize'"                                              ///
+        "`samplefrac'"                                               ///
+        "`do_honesty'"                                               ///
+        "`honestyfrac'"                                              ///
+        "`do_honesty_prune'"                                         ///
+        "`alpha'"                                                    ///
+        "`imbalancepenalty'"                                          ///
+        "`cigroupsize'"                                              ///
+        "`numthreads'"                                               ///
+        "`do_est_var'"                                               ///
+        "0"                                                          ///
+        "`nindep'"                                                   ///
+        "1"                                                          ///
+        "`n_regressors'"                                             ///
+        "0"                                                          ///
+        "`n_output'"                                                 ///
+        "`allow_missing_x'"                                          ///
+        "`cluster_col_idx'"                                          ///
+        "`weight_col_idx'"                                           ///
+        "`do_stabilize'"                                                 ///
+        "`gradient_weights_str'"
 
     /* ---- Store results ---- */
     ereturn clear
@@ -300,12 +470,19 @@ program define grf_lm_forest, eclass
     ereturn scalar stabilize   = `do_stabilize'
     ereturn scalar n_regressors = `n_regressors'
     ereturn local  cmd           "grf_lm_forest"
+    ereturn scalar allow_missing_x = `allow_missing_x'
     ereturn local  forest_type   "lm_forest"
     ereturn local  depvar        "`depvar'"
     ereturn local  regvars       "`regvars'"
     ereturn local  indepvars     "`xvarlist'"
     ereturn local  predict_stub  "`generate'"
     ereturn local  yhat_var      "_grf_lm_yhat"
+    if "`cluster_var'" != "" {
+        ereturn local cluster_var "`cluster_var'"
+    }
+    if "`weight_var'" != "" {
+        ereturn local weight_var "`weight_var'"
+    }
 
     /* Per-regressor results */
     forvalues j = 1/`n_regressors' {

@@ -26,6 +26,7 @@
 #include <fstream>
 #include <sstream>
 #include <set>
+#include <unordered_map>
 
 /* Eigen linear algebra (for local linear regression) */
 #include <Eigen/Dense>
@@ -93,9 +94,11 @@ static void split_train_test(
                 all_data[(size_t)col * n_total + (n_train + row)];
 }
 
-/* Helper: set standard indices on a grf::Data object */
+/* Helper: set standard indices on a grf::Data object.
+ * weight_col: 0-indexed column for sample weights, or -1 for none. */
 static void set_data_indices(grf::Data& d, int y_start, int n_y,
-                             int w_start, int n_w, int z_start, int n_z)
+                             int w_start, int n_w, int z_start, int n_z,
+                             int weight_col = -1, int cluster_col = -1)
 {
     if (n_y == 1) {
         d.set_outcome_index((size_t)y_start);
@@ -115,6 +118,12 @@ static void set_data_indices(grf::Data& d, int y_start, int n_y,
     }
     if (n_z > 0) {
         d.set_instrument_index((size_t)z_start);
+    }
+    if (weight_col >= 0) {
+        d.set_weight_index((size_t)weight_col);
+    }
+    if (cluster_col >= 0) {
+        d.add_disallowed_split_variable((size_t)cluster_col);
     }
 }
 
@@ -148,32 +157,35 @@ static void set_data_indices(grf::Data& d, int y_start, int n_y,
  *   [17] n_w (int, number of treatment variables)
  *   [18] n_z (int, number of instrument variables)
  *   [19] n_output (int, number of output variables)
+ *   [20] allow_missing_x (int: 0/1, default 1 = MIA enabled)
+ *   [21] cluster_col_idx (int: 0=no clustering, >0 = 1-indexed Stata col)
+ *   [22] weight_col_idx (int: 0=no weights, >0 = 1-indexed Stata col)
  *
- * Forest-specific args (argv[20+]):
- *   Causal: [20]=stabilize_splits (int: 0/1)
- *   Quantile: [20]=quantiles (comma-separated, e.g. "0.1,0.5,0.9")
- *   Instrumental: [20]=reduced_form_weight (double), [21]=stabilize_splits
- *   Probability: [20]=num_classes (int)
- *   Survival: [20]=num_failures (int), [21]=prediction_type (int)
- *   Causal Survival: [20]=stabilize_splits (int), [21-23]=col indices,
- *                    [24]=target (int: 1=RMST, 2=survival probability)
- *   Multi-arm Causal: [20]=stabilize_splits (int)
- *   LL Regression: [20]=enable_ll_split (int), [21]=ll_lambda (double),
- *                  [22]=ll_weight_penalty (int), [23]=ll_split_cutoff (int)
- *   Boosted Regression: [20]=boost_steps (int), [21]=boost_error_reduction (double),
- *                       [22]=boost_max_steps (int), [23]=boost_trees_tune (int),
- *                       [24]=stabilize_splits (int: 0/1)
- *   LM Forest: [20]=stabilize_splits (int)
- *   Variable Importance: [20]=max_depth (int)
- *   Split Frequencies: [20]=max_depth (int)
+ * Forest-specific args (argv[23+]):
+ *   Causal: [23]=stabilize_splits (int: 0/1)
+ *   Quantile: [23]=quantiles (comma-separated, e.g. "0.1,0.5,0.9")
+ *   Instrumental: [23]=reduced_form_weight (double), [24]=stabilize_splits
+ *   Probability: [23]=num_classes (int)
+ *   Survival: [23]=num_failures (int), [24]=prediction_type (int)
+ *   Causal Survival: [23]=stabilize_splits (int), [24-26]=col indices,
+ *                    [27]=target (int: 1=RMST, 2=survival probability)
+ *   Multi-arm Causal: [23]=stabilize_splits (int)
+ *   LL Regression: [23]=enable_ll_split (int), [24]=ll_lambda (double),
+ *                  [25]=ll_weight_penalty (int), [26]=ll_split_cutoff (int)
+ *   Boosted Regression: [23]=boost_steps (int), [24]=boost_error_reduction (double),
+ *                       [25]=boost_max_steps (int), [26]=boost_trees_tune (int),
+ *                       [27]=stabilize_splits (int: 0/1)
+ *   LM Forest: [23]=stabilize_splits (int)
+ *   Variable Importance: [23]=max_depth (int)
+ *   Split Frequencies: [23]=max_depth (int)
  */
 extern "C" STDLL stata_call(int argc, char *argv[])
 {
     char msg[1024];
 
-    if (argc < 20) {
+    if (argc < 23) {
         snprintf(msg, sizeof(msg),
-                 "GRF error: expected at least 20 arguments, got %d\n", argc);
+                 "GRF error: expected at least 23 arguments, got %d\n", argc);
         SF_error(msg);
         return 198;
     }
@@ -202,6 +214,9 @@ extern "C" STDLL stata_call(int argc, char *argv[])
     int n_w                 = parse_int(argv[17], 0);
     int n_z                 = parse_int(argv[18], 0);
     int n_output            = parse_int(argv[19], 1);
+    int allow_missing_x     = parse_int(argv[20], 1);  /* MIA: 1=allow NaN covariates */
+    int cluster_col_idx     = parse_int(argv[21], 0);  /* 0=no clustering */
+    int weight_col_idx      = parse_int(argv[22], 0);  /* 0=no weights */
 
     /* Validate */
     if (num_trees <= 0) num_trees = 2000;
@@ -271,20 +286,35 @@ extern "C" STDLL stata_call(int argc, char *argv[])
     std::vector<int> obs_map;
     obs_map.reserve(n);
 
-    /* Pass 1: identify valid (non-missing) observations */
+    /* Pass 1: identify valid observations.
+     *
+     * MIA (Missing Indicator Action) mode (allow_missing_x=1, default):
+     *   - Missing covariates (X columns 0..n_x-1) are allowed; they will be
+     *     passed as NaN to grf's Data class, which handles MIA splitting natively.
+     *   - Missing outcomes/treatment/instrument (Y, W, Z) still cause the
+     *     observation to be dropped (these are genuinely invalid).
+     *
+     * Casewise deletion mode (allow_missing_x=0, triggered by nomia option):
+     *   - Any missing value in any column drops the observation (legacy behavior).
+     */
     for (ST_int i = obs1; i <= obs2; i++) {
         if (!SF_ifobs(i)) continue;
 
-        bool has_missing = false;
+        bool has_missing_required = false;
         for (int j = 0; j < n_data_cols; j++) {
             double val;
             ST_retcode rc = SF_vdata(j + 1, i, &val);
             if (rc || SF_is_missing(val)) {
-                has_missing = true;
+                if (allow_missing_x && j < n_x) {
+                    /* MIA mode: missing covariate is OK, will be NaN */
+                    continue;
+                }
+                /* Missing outcome/treatment/instrument, or casewise deletion mode */
+                has_missing_required = true;
                 break;
             }
         }
-        if (!has_missing) {
+        if (!has_missing_required) {
             obs_map.push_back((int)i);
         }
     }
@@ -310,14 +340,20 @@ extern "C" STDLL stata_call(int argc, char *argv[])
         }
     }
 
-    /* Pass 2: read data in column-major order */
+    /* Pass 2: read data in column-major order.
+     * In MIA mode, missing covariates are stored as NaN so grf's
+     * MIA splitting can route them to dedicated split paths. */
     std::vector<double> data_vec((size_t)n_data_cols * n);
     for (int idx = 0; idx < n; idx++) {
         ST_int i = obs_map[idx];
         for (int j = 0; j < n_data_cols; j++) {
             double val;
-            SF_vdata(j + 1, i, &val);
-            data_vec[(size_t)j * n + idx] = val;
+            ST_retcode rc = SF_vdata(j + 1, i, &val);
+            if ((rc || SF_is_missing(val)) && allow_missing_x && j < n_x) {
+                data_vec[(size_t)j * n + idx] = std::nan("");
+            } else {
+                data_vec[(size_t)j * n + idx] = val;
+            }
         }
     }
 
@@ -331,40 +367,58 @@ extern "C" STDLL stata_call(int argc, char *argv[])
     int w_start = n_x + n_y;
     int z_start = n_x + n_y + n_w;
 
-    /* Set outcome index(es) */
-    if (n_y == 1) {
-        data.set_outcome_index((size_t)y_start);
-    } else {
-        std::vector<size_t> outcome_idx(n_y);
-        for (int i = 0; i < n_y; i++) outcome_idx[i] = (size_t)(y_start + i);
-        data.set_outcome_index(outcome_idx);
-    }
+    /* Weight and cluster column indices in the data matrix (0-indexed), or -1 if absent */
+    int weight_col = (weight_col_idx > 0) ? (weight_col_idx - 1) : -1;
+    int cluster_col = (cluster_col_idx > 0) ? (cluster_col_idx - 1) : -1;
 
-    /* Set treatment index(es) if applicable */
-    if (n_w > 0) {
-        if (n_w == 1) {
-            data.set_treatment_index((size_t)w_start);
-        } else {
-            std::vector<size_t> treat_idx(n_w);
-            for (int i = 0; i < n_w; i++) treat_idx[i] = (size_t)(w_start + i);
-            data.set_treatment_index(treat_idx);
-        }
-    }
-
-    /* Set instrument index if applicable */
-    if (n_z > 0) {
-        data.set_instrument_index((size_t)z_start);
-    }
+    set_data_indices(data, y_start, n_y, w_start, n_w, z_start, n_z, weight_col, cluster_col);
 
     /* For survival forests, set censor index
      * Layout: X Y(time) censor W (treatment for causal survival)
      * We handle special indexing per forest type below */
 
     /* ----------------------------------------------------------
-     * Step 3: Create ForestOptions
+     * Step 3: Create ForestOptions (with clusters and weights)
      * ---------------------------------------------------------- */
-    std::vector<size_t> clusters;  /* empty = no clustering */
+
+    /* Build cluster vector if cluster_col_idx > 0 */
+    std::vector<size_t> clusters;
     grf::uint samples_per_cluster = 0;
+    if (cluster_col_idx > 0) {
+        clusters.resize(n);
+        std::unordered_map<size_t, size_t> cluster_counts;
+        for (int idx = 0; idx < n; idx++) {
+            double val;
+            SF_vdata(cluster_col_idx, obs_map[idx], &val);
+            clusters[idx] = (size_t)val;
+            cluster_counts[clusters[idx]]++;
+        }
+        /* samples_per_cluster = min cluster size (matches R's default) */
+        size_t min_cluster_size = SIZE_MAX;
+        for (auto& p : cluster_counts) {
+            if (p.second < min_cluster_size) min_cluster_size = p.second;
+        }
+        samples_per_cluster = (grf::uint)min_cluster_size;
+        snprintf(msg, sizeof(msg), "  Using cluster variable (col %d), %zu clusters, "
+                 "samples_per_cluster=%u.\n",
+                 cluster_col_idx, cluster_counts.size(), samples_per_cluster);
+        SF_display(msg);
+    }
+
+    /* Validate sample weights if present (weight_col already set via set_data_indices) */
+    if (weight_col_idx > 0) {
+        int wt_data_col = weight_col_idx - 1;
+        for (int idx = 0; idx < n; idx++) {
+            double val = data_vec[(size_t)wt_data_col * n + idx];
+            if (val < 0.0) {
+                SF_error("GRF error: sample weights must be non-negative.\n");
+                return 198;
+            }
+        }
+        snprintf(msg, sizeof(msg), "  Using sample weights (col %d).\n", weight_col_idx);
+        SF_display(msg);
+    }
+
     bool legacy_seed = false;
 
     grf::ForestOptions options(
@@ -408,7 +462,7 @@ extern "C" STDLL stata_call(int argc, char *argv[])
             std::vector<double> train_vec, test_vec;
             split_train_test(data_vec, n, n_data_cols, n_train, n_x, train_vec, test_vec);
             grf::Data train_data(train_vec.data(), (size_t)n_train, (size_t)n_data_cols);
-            set_data_indices(train_data, y_start, n_y, w_start, n_w, z_start, n_z);
+            set_data_indices(train_data, y_start, n_y, w_start, n_w, z_start, n_z, weight_col, cluster_col);
             grf::Data test_data(test_vec.data(), (size_t)n_test, (size_t)n_x);
 
             SF_display("  Training regression forest...\n");
@@ -461,7 +515,7 @@ extern "C" STDLL stata_call(int argc, char *argv[])
          * Data layout: X Y.centered W.centered
          * The .ado handles nuisance estimation (Y.hat, W.hat) and centering.
          */
-        int stabilize = (argc > 20) ? parse_int(argv[20], 1) : 1;
+        int stabilize = (argc > 23) ? parse_int(argv[23], 1) : 1;
 
         grf::ForestTrainer trainer = grf::multi_causal_trainer(
             (size_t)n_w, (size_t)n_y, (stabilize != 0));
@@ -477,7 +531,7 @@ extern "C" STDLL stata_call(int argc, char *argv[])
             std::vector<double> train_vec, test_vec;
             split_train_test(data_vec, n, n_data_cols, n_train, n_x, train_vec, test_vec);
             grf::Data train_data(train_vec.data(), (size_t)n_train, (size_t)n_data_cols);
-            set_data_indices(train_data, y_start, n_y, w_start, n_w, z_start, n_z);
+            set_data_indices(train_data, y_start, n_y, w_start, n_w, z_start, n_z, weight_col, cluster_col);
             grf::Data test_data(test_vec.data(), (size_t)n_test, (size_t)n_x);
 
             SF_display("  Training causal forest...\n");
@@ -526,11 +580,11 @@ extern "C" STDLL stata_call(int argc, char *argv[])
 
     } else if (forest_type == "quantile") {
         /* ---- Quantile Forest ----
-         * argv[20] = quantiles (comma-separated, e.g. "0.1,0.5,0.9")
+         * argv[23] = quantiles (comma-separated, e.g. "0.1,0.5,0.9")
          */
         std::vector<double> quantiles;
-        if (argc > 20 && argv[20] && *argv[20]) {
-            std::string qstr(argv[20]);
+        if (argc > 23 && argv[23] && *argv[23]) {
+            std::string qstr(argv[23]);
             std::stringstream ss(qstr);
             std::string token;
             while (std::getline(ss, token, ',')) {
@@ -544,7 +598,10 @@ extern "C" STDLL stata_call(int argc, char *argv[])
             quantiles = {0.1, 0.5, 0.9};
         }
 
-        grf::ForestTrainer trainer = grf::quantile_trainer(quantiles);
+        bool regression_splitting = (argc > 24) ? (parse_int(argv[24], 0) != 0) : false;
+        grf::ForestTrainer trainer = regression_splitting
+            ? grf::regression_trainer()
+            : grf::quantile_trainer(quantiles);
         grf::ForestPredictor predictor = grf::quantile_predictor(resolved_threads, quantiles);
         int out_col_start = nvar - n_output + 1;
         int n_written = 0;
@@ -554,7 +611,7 @@ extern "C" STDLL stata_call(int argc, char *argv[])
             std::vector<double> train_vec, test_vec;
             split_train_test(data_vec, n, n_data_cols, n_train, n_x, train_vec, test_vec);
             grf::Data train_data(train_vec.data(), (size_t)n_train, (size_t)n_data_cols);
-            set_data_indices(train_data, y_start, n_y, w_start, n_w, z_start, n_z);
+            set_data_indices(train_data, y_start, n_y, w_start, n_w, z_start, n_z, weight_col, cluster_col);
             grf::Data test_data(test_vec.data(), (size_t)n_test, (size_t)n_x);
 
             snprintf(msg, sizeof(msg), "  Training quantile forest (%zu quantiles)...\n",
@@ -600,11 +657,11 @@ extern "C" STDLL stata_call(int argc, char *argv[])
 
     } else if (forest_type == "instrumental") {
         /* ---- Instrumental Forest ----
-         * argv[20] = reduced_form_weight (double, default 0)
-         * argv[21] = stabilize_splits (int, default 1)
+         * argv[23] = reduced_form_weight (double, default 0)
+         * argv[24] = stabilize_splits (int, default 1)
          */
-        double reduced_form_weight = (argc > 20) ? parse_double(argv[20], 0.0) : 0.0;
-        int stabilize = (argc > 21) ? parse_int(argv[21], 1) : 1;
+        double reduced_form_weight = (argc > 23) ? parse_double(argv[23], 0.0) : 0.0;
+        int stabilize = (argc > 24) ? parse_int(argv[24], 1) : 1;
 
         grf::ForestTrainer trainer = grf::instrumental_trainer(
             reduced_form_weight, (stabilize != 0));
@@ -619,7 +676,7 @@ extern "C" STDLL stata_call(int argc, char *argv[])
             std::vector<double> train_vec, test_vec;
             split_train_test(data_vec, n, n_data_cols, n_train, n_x, train_vec, test_vec);
             grf::Data train_data(train_vec.data(), (size_t)n_train, (size_t)n_data_cols);
-            set_data_indices(train_data, y_start, n_y, w_start, n_w, z_start, n_z);
+            set_data_indices(train_data, y_start, n_y, w_start, n_w, z_start, n_z, weight_col, cluster_col);
             grf::Data test_data(test_vec.data(), (size_t)n_test, (size_t)n_x);
 
             SF_display("  Training instrumental forest...\n");
@@ -668,9 +725,9 @@ extern "C" STDLL stata_call(int argc, char *argv[])
 
     } else if (forest_type == "probability") {
         /* ---- Probability (Classification) Forest ----
-         * argv[20] = num_classes (int)
+         * argv[23] = num_classes (int)
          */
-        int num_classes = (argc > 20) ? parse_int(argv[20], 2) : 2;
+        int num_classes = (argc > 23) ? parse_int(argv[23], 2) : 2;
         if (num_classes < 2) num_classes = 2;
 
         grf::ForestTrainer trainer = grf::probability_trainer((size_t)num_classes);
@@ -684,7 +741,7 @@ extern "C" STDLL stata_call(int argc, char *argv[])
             std::vector<double> train_vec, test_vec;
             split_train_test(data_vec, n, n_data_cols, n_train, n_x, train_vec, test_vec);
             grf::Data train_data(train_vec.data(), (size_t)n_train, (size_t)n_data_cols);
-            set_data_indices(train_data, y_start, n_y, w_start, n_w, z_start, n_z);
+            set_data_indices(train_data, y_start, n_y, w_start, n_w, z_start, n_z, weight_col, cluster_col);
             grf::Data test_data(test_vec.data(), (size_t)n_test, (size_t)n_x);
 
             snprintf(msg, sizeof(msg), "  Training probability forest (%d classes)...\n", num_classes);
@@ -729,15 +786,15 @@ extern "C" STDLL stata_call(int argc, char *argv[])
     } else if (forest_type == "survival") {
         /* ---- Survival Forest ----
          * Data layout: X Y(time) censor
-         * argv[20] = num_failures (int, auto-detected from data)
-         * argv[21] = prediction_type (int, 0=Kaplan-Meier, 1=Nelson-Aalen)
+         * argv[23] = num_failures (int, auto-detected from data)
+         * argv[24] = prediction_type (int, 0=Kaplan-Meier, 1=Nelson-Aalen)
          *
          * The censor variable is the last data column before outputs.
          * We need to set the censor index.
          */
-        int num_failures_arg = (argc > 20) ? parse_int(argv[20], 0) : 0;
-        int prediction_type = (argc > 21) ? parse_int(argv[21], 0) : 0;
-        bool fast_logrank = true;
+        int num_failures_arg = (argc > 23) ? parse_int(argv[23], 0) : 0;
+        int prediction_type = (argc > 24) ? parse_int(argv[24], 0) : 0;
+        bool fast_logrank = (argc > 25) ? (parse_int(argv[25], 1) != 0) : true;
 
         /* Set censor index: it's at position n_x + n_y (assuming n_y=1 for time) */
         /* Layout: X(0..n_x-1) time(n_x) censor(n_x+1)
@@ -805,7 +862,7 @@ extern "C" STDLL stata_call(int argc, char *argv[])
             std::vector<double> train_vec, test_vec;
             split_train_test(data_vec, n, n_data_cols, n_train, n_x, train_vec, test_vec);
             grf::Data train_data(train_vec.data(), (size_t)n_train, (size_t)n_data_cols);
-            set_data_indices(train_data, y_start, n_y, w_start, n_w, z_start, n_z);
+            set_data_indices(train_data, y_start, n_y, w_start, n_w, z_start, n_z, weight_col, cluster_col);
             train_data.set_censor_index((size_t)censor_col);
             grf::Data test_data(test_vec.data(), (size_t)n_test, (size_t)n_x);
 
@@ -829,6 +886,8 @@ extern "C" STDLL stata_call(int argc, char *argv[])
             grf::Data data_surv(data_vec.data(), n, n_data_cols);
             data_surv.set_outcome_index(y_start);
             data_surv.set_censor_index((size_t)censor_col);
+            if (weight_col >= 0) data_surv.set_weight_index((size_t)weight_col);
+            if (cluster_col >= 0) data_surv.add_disallowed_split_variable((size_t)cluster_col);
 
             snprintf(msg, sizeof(msg), "  Training survival forest (failures=%d)...\n", num_failures);
             SF_display(msg);
@@ -857,19 +916,19 @@ extern "C" STDLL stata_call(int argc, char *argv[])
          * Data layout: X Y(time) W(treatment) censor numerator denominator
          * These are pre-computed by the .ado wrapper following grf's pipeline.
          */
-        int stabilize = (argc > 20) ? parse_int(argv[20], 1) : 1;
+        int stabilize = (argc > 23) ? parse_int(argv[23], 1) : 1;
 
         /* Set special indices for causal survival
          * The .ado sets up: X time W censor cs_numer cs_denom
          * outcome=time, treatment=W, censor, cs_numerator, cs_denominator */
-        int cs_numer_col = (argc > 21) ? parse_int(argv[21], -1) : -1;
-        int cs_denom_col = (argc > 22) ? parse_int(argv[22], -1) : -1;
-        int censor_col_cs = (argc > 23) ? parse_int(argv[23], -1) : -1;
+        int cs_numer_col = (argc > 24) ? parse_int(argv[24], -1) : -1;
+        int cs_denom_col = (argc > 25) ? parse_int(argv[25], -1) : -1;
+        int censor_col_cs = (argc > 26) ? parse_int(argv[26], -1) : -1;
 
         /* target: 1=RMST (default), 2=survival probability
          * This affects nuisance column interpretation. The .ado computes
          * numerator/denominator differently for each target type. */
-        int cs_target = (argc > 24) ? parse_int(argv[24], 1) : 1;
+        int cs_target = (argc > 27) ? parse_int(argv[27], 1) : 1;
         const char* target_label = (cs_target == 2) ? "survival probability" : "RMST";
         snprintf(msg, sizeof(msg), "  Target estimand: %s (target=%d)\n", target_label, cs_target);
         SF_display(msg);
@@ -892,7 +951,7 @@ extern "C" STDLL stata_call(int argc, char *argv[])
             std::vector<double> train_vec, test_vec;
             split_train_test(data_vec, n, n_data_cols, n_train, n_x, train_vec, test_vec);
             grf::Data train_data(train_vec.data(), (size_t)n_train, (size_t)n_data_cols);
-            set_data_indices(train_data, y_start, n_y, w_start, n_w, z_start, n_z);
+            set_data_indices(train_data, y_start, n_y, w_start, n_w, z_start, n_z, weight_col, cluster_col);
             if (cs_numer_col >= 0) train_data.set_causal_survival_numerator_index((size_t)cs_numer_col);
             if (cs_denom_col >= 0) train_data.set_causal_survival_denominator_index((size_t)cs_denom_col);
             if (censor_col_cs >= 0) train_data.set_censor_index((size_t)censor_col_cs);
@@ -947,7 +1006,7 @@ extern "C" STDLL stata_call(int argc, char *argv[])
         /* ---- Multi-arm Causal Forest ----
          * multi_causal_trainer with num_treatments > 1
          */
-        int stabilize = (argc > 20) ? parse_int(argv[20], 1) : 1;
+        int stabilize = (argc > 23) ? parse_int(argv[23], 1) : 1;
 
         grf::ForestTrainer trainer = grf::multi_causal_trainer(
             (size_t)n_w, (size_t)n_y, (stabilize != 0));
@@ -963,7 +1022,7 @@ extern "C" STDLL stata_call(int argc, char *argv[])
             std::vector<double> train_vec, test_vec;
             split_train_test(data_vec, n, n_data_cols, n_train, n_x, train_vec, test_vec);
             grf::Data train_data(train_vec.data(), (size_t)n_train, (size_t)n_data_cols);
-            set_data_indices(train_data, y_start, n_y, w_start, n_w, z_start, n_z);
+            set_data_indices(train_data, y_start, n_y, w_start, n_w, z_start, n_z, weight_col, cluster_col);
             grf::Data test_data(test_vec.data(), (size_t)n_test, (size_t)n_x);
 
             SF_display("  Training multi-arm causal forest...\n");
@@ -1033,7 +1092,7 @@ extern "C" STDLL stata_call(int argc, char *argv[])
             std::vector<double> train_vec, test_vec;
             split_train_test(data_vec, n, n_data_cols, n_train, n_x, train_vec, test_vec);
             grf::Data train_data(train_vec.data(), (size_t)n_train, (size_t)n_data_cols);
-            set_data_indices(train_data, y_start, n_y, w_start, n_w, z_start, n_z);
+            set_data_indices(train_data, y_start, n_y, w_start, n_w, z_start, n_z, weight_col, cluster_col);
             grf::Data test_data(test_vec.data(), (size_t)n_test, (size_t)n_x);
 
             snprintf(msg, sizeof(msg), "  Training multi-regression forest (%d outcomes)...\n", n_y);
@@ -1079,7 +1138,8 @@ extern "C" STDLL stata_call(int argc, char *argv[])
          * Trains a regression forest and computes split-frequency-based
          * variable importance. Writes to Stata matrix.
          */
-        int max_depth = (argc > 20) ? parse_int(argv[20], 4) : 4;
+        int max_depth = (argc > 23) ? parse_int(argv[23], 4) : 4;
+        double decay_exponent = (argc > 24) ? parse_double(argv[24], 2.0) : 2.0;
 
         SF_display("  Training forest for variable importance...\n");
         grf::ForestTrainer trainer = grf::regression_trainer();
@@ -1088,12 +1148,13 @@ extern "C" STDLL stata_call(int argc, char *argv[])
         grf::SplitFrequencyComputer sfc;
         std::vector<std::vector<size_t>> freqs = sfc.compute(forest, (size_t)max_depth);
 
-        /* Compute variable importance as weighted split frequencies
-         * (matches R's variable_importance which is a depth-weighted sum) */
+        /* Compute variable importance as weighted split frequencies.
+         * R's variable_importance uses: depth^(-decay_exponent) weighting
+         * where depth is 1-indexed (so d+1 here since d is 0-indexed). */
         std::vector<double> vi(n_x, 0.0);
         double total = 0.0;
         for (size_t d = 0; d < freqs.size(); d++) {
-            double depth_weight = 1.0 / (1.0 + (double)d);
+            double depth_weight = std::pow((double)(d + 1), -decay_exponent);
             for (size_t v = 0; v < (size_t)n_x && v < freqs[d].size(); v++) {
                 vi[v] += depth_weight * (double)freqs[d][v];
                 total += depth_weight * (double)freqs[d][v];
@@ -1120,19 +1181,31 @@ extern "C" STDLL stata_call(int argc, char *argv[])
 
     } else if (forest_type == "ll_regression") {
         /* ---- Local Linear Regression Forest ---- */
-        int enable_ll_split = (argc > 20) ? parse_int(argv[20], 0) : 0;
-        double ll_lambda = (argc > 21) ? parse_double(argv[21], 0.1) : 0.1;
-        int ll_weight_penalty_flag = (argc > 22) ? parse_int(argv[22], 0) : 0;
-        int ll_split_cutoff = (argc > 23) ? parse_int(argv[23], 0) : 0;
+        int enable_ll_split = (argc > 23) ? parse_int(argv[23], 0) : 0;
+        double ll_lambda = (argc > 24) ? parse_double(argv[24], 0.1) : 0.1;
+        int ll_weight_penalty_flag = (argc > 25) ? parse_int(argv[25], 0) : 0;
+        int ll_split_cutoff = (argc > 26) ? parse_int(argv[26], 0) : 0;
 
         if (ll_split_cutoff <= 0) {
             ll_split_cutoff = (int)std::ceil(std::sqrt((double)n));
         }
 
-        // All X variables used for local linear correction (0-indexed)
+        /* Parse ll_split_vars from argv[27] (space-separated 0-indexed indices)
+         * If empty or not provided, use all X variables (default). */
         std::vector<size_t> ll_split_vars;
-        for (int j = 0; j < n_x; j++) {
-            ll_split_vars.push_back((size_t)j);
+        if (argc > 27 && argv[27] != NULL && strlen(argv[27]) > 0) {
+            std::istringstream sv_stream(argv[27]);
+            int sv_idx;
+            while (sv_stream >> sv_idx) {
+                if (sv_idx >= 0 && sv_idx < n_x) {
+                    ll_split_vars.push_back((size_t)sv_idx);
+                }
+            }
+        }
+        if (ll_split_vars.empty()) {
+            for (int j = 0; j < n_x; j++) {
+                ll_split_vars.push_back((size_t)j);
+            }
         }
 
         // Compute overall_beta for regularization fallback (only if enable_ll_split && cutoff > 0)
@@ -1204,7 +1277,7 @@ extern "C" STDLL stata_call(int argc, char *argv[])
             std::vector<double> train_vec, test_vec;
             split_train_test(data_vec, n, n_data_cols, n_train, n_x, train_vec, test_vec);
             grf::Data train_data(train_vec.data(), (size_t)n_train, (size_t)n_data_cols);
-            set_data_indices(train_data, y_start, n_y, w_start, n_w, z_start, n_z);
+            set_data_indices(train_data, y_start, n_y, w_start, n_w, z_start, n_z, weight_col, cluster_col);
             grf::Data test_data(test_vec.data(), (size_t)n_test, (size_t)n_x);
 
             SF_display("  Training LL regression forest...\n");
@@ -1256,11 +1329,11 @@ extern "C" STDLL stata_call(int argc, char *argv[])
          * Iteratively fit regression forests to residuals.
          * If boost_steps=0, auto-tune via cross-validation.
          */
-        int boost_steps = (argc > 20) ? parse_int(argv[20], 0) : 0;
-        double boost_error_reduction = (argc > 21) ? parse_double(argv[21], 0.97) : 0.97;
-        int boost_max_steps = (argc > 22) ? parse_int(argv[22], 5) : 5;
-        int boost_trees_tune = (argc > 23) ? parse_int(argv[23], 10) : 10;
-        int stabilize = (argc > 24) ? parse_int(argv[24], 1) : 1;
+        int boost_steps = (argc > 23) ? parse_int(argv[23], 0) : 0;
+        double boost_error_reduction = (argc > 24) ? parse_double(argv[24], 0.97) : 0.97;
+        int boost_max_steps = (argc > 25) ? parse_int(argv[25], 5) : 5;
+        int boost_trees_tune = (argc > 26) ? parse_int(argv[26], 10) : 10;
+        int stabilize = (argc > 27) ? parse_int(argv[27], 1) : 1;
 
         /* regression_trainer() does not use stabilize_splits (no treatment to stabilize).
          * The flag is accepted for interface consistency and reserved for future use. */
@@ -1293,7 +1366,7 @@ extern "C" STDLL stata_call(int argc, char *argv[])
                     legacy_seed, clusters, samples_per_cluster);
 
                 grf::Data tune_data(resid_data.data(), (size_t)n, (size_t)n_data_cols);
-                set_data_indices(tune_data, y_start, n_y, w_start, n_w, z_start, n_z);
+                set_data_indices(tune_data, y_start, n_y, w_start, n_w, z_start, n_z, weight_col, cluster_col);
 
                 grf::Forest tune_forest = trainer.train(tune_data, tune_options);
                 auto tune_preds = predictor.predict_oob(tune_forest, tune_data, true);
@@ -1343,7 +1416,7 @@ extern "C" STDLL stata_call(int argc, char *argv[])
                 legacy_seed, clusters, samples_per_cluster);
 
             grf::Data step_data(resid_data.data(), (size_t)n, (size_t)n_data_cols);
-            set_data_indices(step_data, y_start, n_y, w_start, n_w, z_start, n_z);
+            set_data_indices(step_data, y_start, n_y, w_start, n_w, z_start, n_z, weight_col, cluster_col);
 
             grf::Forest forest = trainer.train(step_data, step_options);
             auto step_preds = predictor.predict_oob(forest, step_data, (boost_steps == 0));
@@ -1410,11 +1483,23 @@ extern "C" STDLL stata_call(int argc, char *argv[])
          * The .ado handles centering (Y - Y.hat, W - W.hat).
          * C++ training: same as multi_arm_causal (multi_causal_trainer).
          * The treatment columns are the "regressors" W.
+         * argv[23] = stabilize_splits (0/1)
+         * argv[24] = gradient_weights (space-separated doubles, or empty)
          */
-        int stabilize = (argc > 20) ? parse_int(argv[20], 0) : 0;
+        int stabilize = (argc > 23) ? parse_int(argv[23], 0) : 0;
+
+        /* Parse gradient_weights from argv[24] */
+        std::vector<double> gradient_weights;
+        if (argc > 24 && argv[24] != NULL && strlen(argv[24]) > 0) {
+            std::istringstream gw_stream(argv[24]);
+            double gw_val;
+            while (gw_stream >> gw_val) {
+                gradient_weights.push_back(gw_val);
+            }
+        }
 
         grf::ForestTrainer trainer = grf::multi_causal_trainer(
-            (size_t)n_w, (size_t)n_y, (stabilize != 0));
+            (size_t)n_w, (size_t)n_y, (stabilize != 0), gradient_weights);
         grf::ForestPredictor predictor = grf::multi_causal_predictor(
             resolved_threads, (size_t)n_w, (size_t)n_y);
         bool est_var = (estimate_variance != 0);
@@ -1429,7 +1514,7 @@ extern "C" STDLL stata_call(int argc, char *argv[])
             std::vector<double> train_vec, test_vec;
             split_train_test(data_vec, n, n_data_cols, n_train, n_x, train_vec, test_vec);
             grf::Data train_data(train_vec.data(), (size_t)n_train, (size_t)n_data_cols);
-            set_data_indices(train_data, y_start, n_y, w_start, n_w, z_start, n_z);
+            set_data_indices(train_data, y_start, n_y, w_start, n_w, z_start, n_z, weight_col, cluster_col);
             grf::Data test_data(test_vec.data(), (size_t)n_test, (size_t)n_x);
 
             SF_display("  Training LM forest...\n");

@@ -31,7 +31,15 @@ program define grf_multi_arm_causal_forest, eclass
             NUMThreads(integer 0)              ///
             ESTIMATEVariance                   ///
             noSTABilizesplits                  ///
+            YHATinput(varname numeric)         ///
+            WHATinput(varlist numeric)         ///
+            YHATgenerate(name)                 ///
+            WHATgenerate(namelist)             ///
             REPlace                            ///
+            noMIA                              ///
+            CLuster(varname numeric)           ///
+            WEIghts(varname numeric)           ///
+            EQUALizeclusterweights             ///
         ]
 
     /* ---- Validate ntreat ---- */
@@ -67,6 +75,42 @@ program define grf_multi_arm_causal_forest, eclass
         }
     }
 
+    /* ---- Parse MIA ---- */
+    local allow_missing_x 1
+    if "`mia'" == "nomia" {
+        local allow_missing_x 0
+    }
+
+    /* ---- Parse cluster ---- */
+    local cluster_col_idx 0
+    if "`cluster'" != "" {
+        local cluster_var `cluster'
+    }
+
+    /* ---- Parse weights ---- */
+    local weight_col_idx 0
+    if "`weights'" != "" {
+        local weight_var `weights'
+    }
+
+    /* ---- Parse equalize cluster weights ---- */
+    if "`equalizeclusterweights'" != "" {
+        if "`cluster'" == "" {
+            display as error "equalizeclusterweights requires cluster() option"
+            exit 198
+        }
+        /* Compute 1/cluster_size for each observation */
+        tempvar _eq_clsize _eq_wt
+        quietly bysort `cluster': gen long `_eq_clsize' = _N if `touse'
+        quietly gen double `_eq_wt' = 1.0 / `_eq_clsize' if `touse'
+        /* Combine with existing weights if any */
+        if "`weight_var'" != "" {
+            quietly replace `_eq_wt' = `_eq_wt' * `weight_var' if `touse'
+        }
+        /* Use equalized weights as the weight variable */
+        local weight_var `_eq_wt'
+    }
+
     /* ---- Parse varlist: depvar treat1 treat2 ... indepvar1 indepvar2 ... ---- */
     gettoken depvar rest : varlist
     local treatvars ""
@@ -93,7 +137,22 @@ program define grf_multi_arm_causal_forest, eclass
     }
 
     /* ---- Mark sample ---- */
-    marksample touse
+    if `allow_missing_x' {
+        marksample touse, novarlist
+        markout `touse' `depvar'
+        foreach tv of local treatvars {
+            markout `touse' `tv'
+        }
+        if "`cluster_var'" != "" {
+            markout `touse' `cluster_var'
+        }
+        if "`weight_var'" != "" {
+            markout `touse' `weight_var'
+        }
+    }
+    else {
+        marksample touse
+    }
     quietly count if `touse'
     local n_use = r(N)
 
@@ -163,8 +222,7 @@ program define grf_multi_arm_causal_forest, eclass
     if ( inlist("`c(os)'", "MacOSX") | strpos("`c(machine_type)'", "Mac") ) local c_os_ macosx
     else local c_os_: di lower("`c(os)'")
 
-    cap program drop grf_plugin
-    program grf_plugin, plugin using("grf_plugin_`c_os_'.plugin")
+    capture program grf_plugin, plugin using("grf_plugin_`c_os_'.plugin")
 
     /* ==== Nuisance estimation pipeline ====
      *
@@ -175,68 +233,120 @@ program define grf_multi_arm_causal_forest, eclass
      *   4. Fit multi-arm causal forest on (X, Y.c, W1.c, W2.c, ...)
      */
 
-    /* ---- Step 1: Fit Y.hat ---- */
-    display as text "Step 1/`=`ntreat'+2': Fitting nuisance model Y ~ X ..."
-    tempvar yhat
-    quietly gen double `yhat' = .
-    plugin call grf_plugin `indepvars' `depvar' `yhat' ///
-        if `touse',                                     ///
-        "regression"                                    ///
-        "`ntrees'"                                      ///
-        "`seed'"                                        ///
-        "`mtry'"                                        ///
-        "`minnodesize'"                                 ///
-        "`samplefrac'"                                  ///
-        "`do_honesty'"                                  ///
-        "`honestyfrac'"                                 ///
-        "`do_honesty_prune'"                            ///
-        "`alpha'"                                       ///
-        "`imbalancepenalty'"                             ///
-        "`cigroupsize'"                                 ///
-        "`numthreads'"                                  ///
-        "0"                                             ///
-        "0"                                             ///
-        "`nindep'"                                      ///
-        "1"                                             ///
-        "0"                                             ///
-        "0"                                             ///
-        "1"
+    /* Nuisance column indices (regression: X + Y = nindep + 1 data cols) */
+    local _nuis_data_cols = `nindep' + 1
+    local _nuis_cluster_idx 0
+    local _nuis_weight_idx 0
+    if "`cluster_var'" != "" {
+        local _nuis_cluster_idx = `_nuis_data_cols' + 1
+    }
+    if "`weight_var'" != "" {
+        local _nuis_offset = 0
+        if "`cluster_var'" != "" {
+            local _nuis_offset = 1
+        }
+        local _nuis_weight_idx = `_nuis_data_cols' + `_nuis_offset' + 1
+    }
 
-    /* ---- Step 2: Fit W_k.hat for each treatment arm ---- */
-    local w_centered_vars ""
-    forvalues j = 1/`ntreat' {
-        local step = `j' + 1
-        local tv : word `j' of `treatvars'
-        display as text "Step `step'/`=`ntreat'+2': Fitting nuisance model `tv' ~ X ..."
+    /* Build extra_vars for nuisance calls */
+    local _nuis_extra_vars ""
+    if "`cluster_var'" != "" {
+        local _nuis_extra_vars `_nuis_extra_vars' `cluster_var'
+    }
+    if "`weight_var'" != "" {
+        local _nuis_extra_vars `_nuis_extra_vars' `weight_var'
+    }
 
-        tempvar what_`j'
-        quietly gen double `what_`j'' = .
-        plugin call grf_plugin `indepvars' `tv' `what_`j'' ///
-            if `touse',                                      ///
-            "regression"                                     ///
-            "`ntrees'"                                       ///
-            "`seed'"                                         ///
-            "`mtry'"                                         ///
-            "`minnodesize'"                                  ///
-            "`samplefrac'"                                   ///
-            "`do_honesty'"                                   ///
-            "`honestyfrac'"                                  ///
-            "`do_honesty_prune'"                             ///
-            "`alpha'"                                        ///
-            "`imbalancepenalty'"                               ///
-            "`cigroupsize'"                                  ///
-            "`numthreads'"                                   ///
-            "0"                                              ///
-            "0"                                              ///
-            "`nindep'"                                       ///
-            "1"                                              ///
-            "0"                                              ///
-            "0"                                              ///
-            "1"
+    if "`yhatinput'" != "" & "`whatinput'" != "" {
+        /* ---- User-supplied nuisance estimates ---- */
+        local n_whatinput : word count `whatinput'
+        if `n_whatinput' != `ntreat' {
+            display as error "whatinput() must contain exactly `ntreat' variables"
+            exit 198
+        }
+        display as text "Using user-supplied nuisance estimates"
+        tempvar yhat
+        quietly gen double `yhat' = `yhatinput' if `touse'
+        local w_centered_vars ""
+        forvalues j = 1/`ntreat' {
+            local tv : word `j' of `treatvars'
+            local wiv : word `j' of `whatinput'
+            tempvar what_`j' wc_`j'
+            quietly gen double `what_`j'' = `wiv' if `touse'
+            quietly gen double `wc_`j'' = `tv' - `what_`j'' if `touse'
+            local w_centered_vars `w_centered_vars' `wc_`j''
+        }
+    }
+    else {
+        /* ---- Step 1: Fit Y.hat ---- */
+        display as text "Step 1/`=`ntreat'+2': Fitting nuisance model Y ~ X ..."
+        tempvar yhat
+        quietly gen double `yhat' = .
+        plugin call grf_plugin `indepvars' `depvar' `_nuis_extra_vars' `yhat' ///
+            if `touse',                                     ///
+            "regression"                                    ///
+            "`ntrees'"                                      ///
+            "`seed'"                                        ///
+            "`mtry'"                                        ///
+            "`minnodesize'"                                 ///
+            "`samplefrac'"                                  ///
+            "`do_honesty'"                                  ///
+            "`honestyfrac'"                                 ///
+            "`do_honesty_prune'"                            ///
+            "`alpha'"                                       ///
+            "`imbalancepenalty'"                             ///
+            "`cigroupsize'"                                 ///
+            "`numthreads'"                                  ///
+            "0"                                             ///
+            "0"                                             ///
+            "`nindep'"                                      ///
+            "1"                                             ///
+            "0"                                             ///
+            "0"                                             ///
+            "1"                                             ///
+            "`allow_missing_x'"                             ///
+            "`_nuis_cluster_idx'"                           ///
+            "`_nuis_weight_idx'"
 
-        tempvar wc_`j'
-        quietly gen double `wc_`j'' = `tv' - `what_`j'' if `touse'
-        local w_centered_vars `w_centered_vars' `wc_`j''
+        /* ---- Step 2: Fit W_k.hat for each treatment arm ---- */
+        local w_centered_vars ""
+        forvalues j = 1/`ntreat' {
+            local step = `j' + 1
+            local tv : word `j' of `treatvars'
+            display as text "Step `step'/`=`ntreat'+2': Fitting nuisance model `tv' ~ X ..."
+
+            tempvar what_`j'
+            quietly gen double `what_`j'' = .
+            plugin call grf_plugin `indepvars' `tv' `_nuis_extra_vars' `what_`j'' ///
+                if `touse',                                      ///
+                "regression"                                     ///
+                "`ntrees'"                                       ///
+                "`seed'"                                         ///
+                "`mtry'"                                         ///
+                "`minnodesize'"                                  ///
+                "`samplefrac'"                                   ///
+                "`do_honesty'"                                   ///
+                "`honestyfrac'"                                  ///
+                "`do_honesty_prune'"                             ///
+                "`alpha'"                                        ///
+                "`imbalancepenalty'"                               ///
+                "`cigroupsize'"                                  ///
+                "`numthreads'"                                   ///
+                "0"                                              ///
+                "0"                                              ///
+                "`nindep'"                                       ///
+                "1"                                              ///
+                "0"                                              ///
+                "0"                                              ///
+                "1"                                              ///
+                "`allow_missing_x'"                              ///
+                "`_nuis_cluster_idx'"                            ///
+                "`_nuis_weight_idx'"
+
+            tempvar wc_`j'
+            quietly gen double `wc_`j'' = `tv' - `what_`j'' if `touse'
+            local w_centered_vars `w_centered_vars' `wc_`j''
+        }
     }
 
     /* ---- Center Y ---- */
@@ -255,6 +365,42 @@ program define grf_multi_arm_causal_forest, eclass
         label variable _grf_mac_what`j' "W`j'.hat from nuisance regression (`tv' ~ X)"
     }
 
+    /* Save with user-specified names if requested */
+    if "`yhatgenerate'" != "" {
+        if "`replace'" != "" { capture drop `yhatgenerate' }
+        confirm new variable `yhatgenerate'
+        quietly gen double `yhatgenerate' = `yhat'
+        label variable `yhatgenerate' "Y.hat from nuisance regression (Y ~ X)"
+    }
+    if "`whatgenerate'" != "" {
+        local n_wg : word count `whatgenerate'
+        if `n_wg' != `ntreat' {
+            display as error "whatgenerate() must contain exactly `ntreat' names"
+            exit 198
+        }
+        forvalues j = 1/`ntreat' {
+            local wgn : word `j' of `whatgenerate'
+            if "`replace'" != "" { capture drop `wgn' }
+            confirm new variable `wgn'
+            quietly gen double `wgn' = `what_`j''
+            local tv : word `j' of `treatvars'
+            label variable `wgn' "W`j'.hat from nuisance regression (`tv' ~ X)"
+        }
+    }
+
+    /* ---- Build extra vars for cluster/weight ---- */
+    local extra_vars ""
+    local n_data_before = `nindep' + 1 + `ntreat'
+    if "`cluster_var'" != "" {
+        local extra_vars `extra_vars' `cluster_var'
+        local cluster_col_idx = `n_data_before' + 1
+        local n_data_before = `n_data_before' + 1
+    }
+    if "`weight_var'" != "" {
+        local extra_vars `extra_vars' `weight_var'
+        local weight_col_idx = `n_data_before' + 1
+    }
+
     /* ---- Call plugin for multi-arm causal forest ----
      *
      * Variable order: X1..Xp Y.c W1.c W2.c ... out_t1 [out_t1_var] out_t2 [out_t2_var] ...
@@ -269,29 +415,33 @@ program define grf_multi_arm_causal_forest, eclass
      */
     local final_step = `ntreat' + 2
     display as text "Step `final_step'/`final_step': Fitting multi-arm causal forest ..."
-    plugin call grf_plugin `indepvars' `y_centered' `w_centered_vars' `output_vars' ///
-        if `touse',                                                                  ///
-        "multi_arm_causal"                                                           ///
-        "`ntrees'"                                                                   ///
-        "`seed'"                                                                     ///
-        "`mtry'"                                                                     ///
-        "`minnodesize'"                                                              ///
-        "`samplefrac'"                                                               ///
-        "`do_honesty'"                                                               ///
-        "`honestyfrac'"                                                              ///
-        "`do_honesty_prune'"                                                         ///
-        "`alpha'"                                                                    ///
-        "`imbalancepenalty'"                                                          ///
-        "`cigroupsize'"                                                              ///
-        "`numthreads'"                                                               ///
-        "`do_est_var'"                                                               ///
-        "0"                                                                          ///
-        "`nindep'"                                                                   ///
-        "1"                                                                          ///
-        "`ntreat'"                                                                   ///
-        "0"                                                                          ///
-        "`n_output'"                                                                 ///
-        "`do_stabilize'"                                                             ///
+    plugin call grf_plugin `indepvars' `y_centered' `w_centered_vars' ///
+        `extra_vars' `output_vars'                                   ///
+        if `touse',                                                  ///
+        "multi_arm_causal"                                           ///
+        "`ntrees'"                                                   ///
+        "`seed'"                                                     ///
+        "`mtry'"                                                     ///
+        "`minnodesize'"                                              ///
+        "`samplefrac'"                                               ///
+        "`do_honesty'"                                               ///
+        "`honestyfrac'"                                              ///
+        "`do_honesty_prune'"                                         ///
+        "`alpha'"                                                    ///
+        "`imbalancepenalty'"                                          ///
+        "`cigroupsize'"                                              ///
+        "`numthreads'"                                               ///
+        "`do_est_var'"                                               ///
+        "0"                                                          ///
+        "`nindep'"                                                   ///
+        "1"                                                          ///
+        "`ntreat'"                                                   ///
+        "0"                                                          ///
+        "`n_output'"                                                 ///
+        "`allow_missing_x'"                                          ///
+        "`cluster_col_idx'"                                          ///
+        "`weight_col_idx'"                                           ///
+        "`do_stabilize'"                                             ///
         "`ntreat'"
 
     /* ---- Store results ---- */
@@ -311,12 +461,19 @@ program define grf_multi_arm_causal_forest, eclass
     ereturn scalar stabilize   = `do_stabilize'
     ereturn scalar n_treat     = `ntreat'
     ereturn local  cmd           "grf_multi_arm_causal_forest"
+    ereturn scalar allow_missing_x = `allow_missing_x'
     ereturn local  forest_type   "multi_causal"
     ereturn local  depvar        "`depvar'"
     ereturn local  treatvars     "`treatvars'"
     ereturn local  indepvars     "`indepvars'"
     ereturn local  predict_stub  "`generate'"
     ereturn local  yhat_var      "_grf_mac_yhat"
+    if "`cluster_var'" != "" {
+        ereturn local cluster_var "`cluster_var'"
+    }
+    if "`weight_var'" != "" {
+        ereturn local weight_var "`weight_var'"
+    }
 
     /* Per-arm ATE estimates */
     forvalues j = 1/`ntreat' {

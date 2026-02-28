@@ -24,8 +24,18 @@ program define grf_instrumental_forest, eclass
             REPlace                            ///
             VARGenerate(name)                  ///
             REDucedformweight(real 0.0)        ///
-            STABilizesplits                    ///
+            noSTABilizesplits                  ///
             NUISancetrees(integer 500)         ///
+            YHATinput(varname numeric)         ///
+            WHATinput(varname numeric)         ///
+            ZHATinput(varname numeric)         ///
+            YHATgenerate(name)                 ///
+            WHATgenerate(name)                 ///
+            ZHATgenerate(name)                 ///
+            noMIA                              ///
+            CLuster(varname numeric)           ///
+            WEIghts(varname numeric)           ///
+            EQUALizeclusterweights             ///
         ]
 
     /* ---- Parse honesty ---- */
@@ -50,9 +60,11 @@ program define grf_instrumental_forest, eclass
     }
 
     /* ---- Parse stabilize_splits ---- */
-    local do_stabilize 0
-    if "`stabilizesplits'" != "" {
-        local do_stabilize 1
+    /* R's instrumental_forest defaults stabilize.splits = TRUE.
+     * noSTABilizesplits is opt-out (default ON). */
+    local do_stabilize 1
+    if "`stabilizesplits'" == "nostabilizesplits" {
+        local do_stabilize 0
     }
 
     /* ---- Handle replace ---- */
@@ -63,6 +75,42 @@ program define grf_instrumental_forest, eclass
         }
     }
     confirm new variable `generate'
+
+    /* ---- Parse MIA ---- */
+    local allow_missing_x 1
+    if "`mia'" == "nomia" {
+        local allow_missing_x 0
+    }
+
+    /* ---- Parse cluster ---- */
+    local cluster_col_idx 0
+    if "`cluster'" != "" {
+        local cluster_var `cluster'
+    }
+
+    /* ---- Parse weights ---- */
+    local weight_col_idx 0
+    if "`weights'" != "" {
+        local weight_var `weights'
+    }
+
+    /* ---- Parse equalize cluster weights ---- */
+    if "`equalizeclusterweights'" != "" {
+        if "`cluster'" == "" {
+            display as error "equalizeclusterweights requires cluster() option"
+            exit 198
+        }
+        /* Compute 1/cluster_size for each observation */
+        tempvar _eq_clsize _eq_wt
+        quietly bysort `cluster': gen long `_eq_clsize' = _N if `touse'
+        quietly gen double `_eq_wt' = 1.0 / `_eq_clsize' if `touse'
+        /* Combine with existing weights if any */
+        if "`weight_var'" != "" {
+            quietly replace `_eq_wt' = `_eq_wt' * `weight_var' if `touse'
+        }
+        /* Use equalized weights as the weight variable */
+        local weight_var `_eq_wt'
+    }
 
     /* ---- Parse varlist: Y W Z X1..Xp ---- */
     gettoken depvar rest : varlist
@@ -76,7 +124,21 @@ program define grf_instrumental_forest, eclass
     }
 
     /* ---- Mark sample ---- */
-    marksample touse
+    if `allow_missing_x' {
+        marksample touse, novarlist
+        markout `touse' `depvar'
+        markout `touse' `treatment'
+        markout `touse' `instrument'
+        if "`cluster_var'" != "" {
+            markout `touse' `cluster_var'
+        }
+        if "`weight_var'" != "" {
+            markout `touse' `weight_var'
+        }
+    }
+    else {
+        marksample touse
+    }
     quietly count if `touse'
     local n_use = r(N)
 
@@ -130,21 +192,48 @@ program define grf_instrumental_forest, eclass
      * Step 4: Y.c = Y - Y.hat, W.c = W - W.hat, Z.c = Z - Z.hat
      */
 
-    display as text "Nuisance estimation (3 regression forests)..."
-
     /* ---- Load plugin ---- */
     if ( inlist("`c(os)'", "MacOSX") | strpos("`c(machine_type)'", "Mac") ) local c_os_ macosx
     else local c_os_: di lower("`c(os)'")
 
-    cap program drop grf_plugin
-    program grf_plugin, plugin using("grf_plugin_`c_os_'.plugin")
+    capture program grf_plugin, plugin using("grf_plugin_`c_os_'.plugin")
+
+    if "`yhatinput'" != "" & "`whatinput'" != "" & "`zhatinput'" != "" {
+        display as text "Nuisance: Using user-supplied estimates"
+        tempvar Y_hat W_hat Z_hat
+        quietly gen double `Y_hat' = `yhatinput' if `touse'
+        quietly gen double `W_hat' = `whatinput' if `touse'
+        quietly gen double `Z_hat' = `zhatinput' if `touse'
+    }
+    else if "`yhatinput'" != "" | "`whatinput'" != "" | "`zhatinput'" != "" {
+        display as error "all three of yhatinput(), whatinput(), zhatinput() must be specified together"
+        exit 198
+    }
+    else {
+
+    display as text "Nuisance estimation (3 regression forests)..."
+
+    /* Nuisance column indices (regression: X + Y = nindep + 1 data cols) */
+    local _nuis_data_cols = `nindep' + 1
+    local _nuis_cluster_idx 0
+    local _nuis_weight_idx 0
+    if "`cluster_var'" != "" {
+        local _nuis_cluster_idx = `_nuis_data_cols' + 1
+    }
+    if "`weight_var'" != "" {
+        local _nuis_offset = 0
+        if "`cluster_var'" != "" {
+            local _nuis_offset = 1
+        }
+        local _nuis_weight_idx = `_nuis_data_cols' + `_nuis_offset' + 1
+    }
 
     /* ---- Step 1: Y.hat ---- */
     tempvar Y_hat
     quietly gen double `Y_hat' = .
 
     display as text "  Fitting Y ~ X..."
-    plugin call grf_plugin `indepvars' `depvar' `Y_hat' ///
+    plugin call grf_plugin `indepvars' `depvar' `extra_vars' `Y_hat' ///
         if `touse',                                      ///
         "regression"                                     ///
         "`nuisancetrees'"                                ///
@@ -165,14 +254,17 @@ program define grf_instrumental_forest, eclass
         "1"                                              ///
         "0"                                              ///
         "0"                                              ///
-        "1"
+        "1"                                              ///
+        "`allow_missing_x'"                              ///
+        "`_nuis_cluster_idx'"                            ///
+        "`_nuis_weight_idx'"
 
     /* ---- Step 2: W.hat ---- */
     tempvar W_hat
     quietly gen double `W_hat' = .
 
     display as text "  Fitting W ~ X..."
-    plugin call grf_plugin `indepvars' `treatment' `W_hat' ///
+    plugin call grf_plugin `indepvars' `treatment' `extra_vars' `W_hat' ///
         if `touse',                                         ///
         "regression"                                        ///
         "`nuisancetrees'"                                   ///
@@ -193,14 +285,17 @@ program define grf_instrumental_forest, eclass
         "1"                                                 ///
         "0"                                                 ///
         "0"                                                 ///
-        "1"
+        "1"                                                 ///
+        "`allow_missing_x'"                                 ///
+        "`_nuis_cluster_idx'"                               ///
+        "`_nuis_weight_idx'"
 
     /* ---- Step 3: Z.hat ---- */
     tempvar Z_hat
     quietly gen double `Z_hat' = .
 
     display as text "  Fitting Z ~ X..."
-    plugin call grf_plugin `indepvars' `instrument' `Z_hat' ///
+    plugin call grf_plugin `indepvars' `instrument' `extra_vars' `Z_hat' ///
         if `touse',                                          ///
         "regression"                                         ///
         "`nuisancetrees'"                                    ///
@@ -221,7 +316,12 @@ program define grf_instrumental_forest, eclass
         "1"                                                  ///
         "0"                                                  ///
         "0"                                                  ///
-        "1"
+        "1"                                                  ///
+        "`allow_missing_x'"                                  ///
+        "`_nuis_cluster_idx'"                                ///
+        "`_nuis_weight_idx'"
+
+    } /* end else: nuisance forest pipeline */
 
     /* ---- Step 4: Center Y, W, Z ---- */
     tempvar Y_centered W_centered Z_centered
@@ -230,6 +330,33 @@ program define grf_instrumental_forest, eclass
     quietly gen double `Z_centered' = `instrument' - `Z_hat' if `touse'
 
     display as text "  Centering complete."
+
+    /* ---- Save nuisance estimates if requested ---- */
+    if "`yhatgenerate'" != "" {
+        if "`replace'" != "" {
+            capture drop `yhatgenerate'
+        }
+        confirm new variable `yhatgenerate'
+        quietly gen double `yhatgenerate' = `Y_hat'
+        label variable `yhatgenerate' "Y.hat = E[Y|X]"
+    }
+    if "`whatgenerate'" != "" {
+        if "`replace'" != "" {
+            capture drop `whatgenerate'
+        }
+        confirm new variable `whatgenerate'
+        quietly gen double `whatgenerate' = `W_hat'
+        label variable `whatgenerate' "W.hat = E[W|X]"
+    }
+    if "`zhatgenerate'" != "" {
+        if "`replace'" != "" {
+            capture drop `zhatgenerate'
+        }
+        confirm new variable `zhatgenerate'
+        quietly gen double `zhatgenerate' = `Z_hat'
+        label variable `zhatgenerate' "Z.hat = E[Z|X]"
+    }
+
     display as text ""
 
     /* ---- Build output varlist ---- */
@@ -238,16 +365,41 @@ program define grf_instrumental_forest, eclass
         local output_vars `generate' `vargenerate'
     }
 
+    /* ---- Build plugin varlist with optional cluster/weight columns ---- */
+    local extra_vars ""
+    if "`cluster_var'" != "" {
+        local extra_vars `extra_vars' `cluster_var'
+    }
+    if "`weight_var'" != "" {
+        local extra_vars `extra_vars' `weight_var'
+    }
+
+    /* Compute cluster/weight column indices in the plugin varlist */
+    /* Instrumental forest data vars: X1..Xp Y.c W.c Z.c => nindep + 3 columns */
+    local _data_col_count = `nindep' + 3
+    if "`cluster_var'" != "" {
+        local cluster_col_idx = `_data_col_count' + 1
+    }
+    if "`weight_var'" != "" {
+        local _offset = 0
+        if "`cluster_var'" != "" {
+            local _offset = 1
+        }
+        local weight_col_idx = `_data_col_count' + `_offset' + 1
+    }
+
     /* ---- Call plugin for instrumental forest ----
      *
-     * Variable order: X1..Xp Y.c W.c Z.c out1 [out2]
+     * Variable order: X1..Xp Y.c W.c Z.c [cluster] [weight] out1 [out2]
      * argv: forest_type num_trees seed mtry min_node_size sample_fraction
      *       honesty honesty_fraction honesty_prune alpha imbalance_penalty
      *       ci_group_size num_threads estimate_variance compute_oob
-     *       n_x n_y n_w n_z n_output reduced_form_weight stabilize_splits
+     *       n_x n_y n_w n_z n_output
+     *       allow_missing_x cluster_col_idx weight_col_idx
+     *       reduced_form_weight stabilize_splits
      */
     plugin call grf_plugin `indepvars' `Y_centered' `W_centered' ///
-        `Z_centered' `output_vars'                                ///
+        `Z_centered' `extra_vars' `output_vars'                   ///
         if `touse',                                               ///
         "instrumental"                                            ///
         "`ntrees'"                                                ///
@@ -269,6 +421,9 @@ program define grf_instrumental_forest, eclass
         "1"                                                       ///
         "1"                                                       ///
         "`n_output'"                                              ///
+        "`allow_missing_x'"                                       ///
+        "`cluster_col_idx'"                                       ///
+        "`weight_col_idx'"                                        ///
         "`reducedformweight'"                                     ///
         "`do_stabilize'"
 
@@ -289,6 +444,7 @@ program define grf_instrumental_forest, eclass
     ereturn scalar reduced_form_wt    = `reducedformweight'
     ereturn scalar stabilize_splits   = `do_stabilize'
     ereturn local  cmd                  "grf_instrumental_forest"
+    ereturn scalar allow_missing_x = `allow_missing_x'
     ereturn local  forest_type          "instrumental"
     ereturn local  depvar               "`depvar'"
     ereturn local  treatment            "`treatment'"
@@ -297,6 +453,26 @@ program define grf_instrumental_forest, eclass
     ereturn local  predict_var          "`generate'"
     if `do_est_var' {
         ereturn local variance_var "`vargenerate'"
+    }
+    if "`cluster_var'" != "" {
+        ereturn local cluster_var "`cluster_var'"
+    }
+    if "`weight_var'" != "" {
+        ereturn local weight_var "`weight_var'"
+    }
+    if "`yhatgenerate'" != "" {
+        ereturn local yhat_var "`yhatgenerate'"
+    }
+    if "`whatgenerate'" != "" {
+        ereturn local what_var "`whatgenerate'"
+    }
+    if "`zhatgenerate'" != "" {
+        ereturn local zhat_var "`zhatgenerate'"
+    }
+    if "`yhatinput'" != "" {
+        ereturn local yhat_input "`yhatinput'"
+        ereturn local what_input "`whatinput'"
+        ereturn local zhat_input "`zhatinput'"
     }
 
     /* ---- Summary stats ---- */

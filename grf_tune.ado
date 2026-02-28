@@ -16,6 +16,9 @@ program define grf_tune, rclass
             noHONesty                          ///
             noHONestyprune                     ///
             noSTABilizesplits                  ///
+            noMIA                              ///
+            CLuster(varname numeric)           ///
+            WEIghts(varname numeric)           ///
             Xvars(varlist numeric)             ///
             NTReat(integer 0)                  ///
             NDEp(integer 0)                    ///
@@ -60,6 +63,28 @@ program define grf_tune, rclass
     local do_stabilize 1
     if "`stabilizesplits'" == "nostabilizesplits" {
         local do_stabilize 0
+    }
+
+    /* ---- Parse MIA ---- */
+    local allow_missing_x 1
+    if "`mia'" == "nomia" {
+        local allow_missing_x 0
+    }
+
+    /* ---- Parse cluster ---- */
+    local cluster_var ""
+    local cluster_col_idx 0
+    if "`cluster'" != "" {
+        local cluster_var "`cluster'"
+        confirm numeric variable `cluster_var'
+    }
+
+    /* ---- Parse weights ---- */
+    local weight_var ""
+    local weight_col_idx 0
+    if "`weights'" != "" {
+        local weight_var "`weights'"
+        confirm numeric variable `weight_var'
     }
 
     /* ---- Parse varlist depending on forest type ---- */
@@ -173,6 +198,15 @@ program define grf_tune, rclass
         }
     }
 
+    /* ---- Build extra vars for cluster/weight ---- */
+    local extra_vars ""
+    if "`cluster_var'" != "" {
+        local extra_vars `extra_vars' `cluster_var'
+    }
+    if "`weight_var'" != "" {
+        local extra_vars `extra_vars' `weight_var'
+    }
+
     /* ---- Mark sample ---- */
     marksample touse
     if "`foresttype'" == "lm_forest" {
@@ -275,8 +309,7 @@ program define grf_tune, rclass
     if ( inlist("`c(os)'", "MacOSX") | strpos("`c(machine_type)'", "Mac") ) local c_os_ macosx
     else local c_os_: di lower("`c(os)'")
 
-    cap program drop grf_plugin
-    program grf_plugin, plugin using("grf_plugin_`c_os_'.plugin")
+    capture program grf_plugin, plugin using("grf_plugin_`c_os_'.plugin")
 
     /* ---- Set seed for reproducibility ---- */
     set seed `seed'
@@ -306,8 +339,23 @@ program define grf_tune, rclass
         quietly gen double `yhat_nuis' = .
         quietly gen double `what_nuis' = .
 
+        /* Compute nuisance column indices for cluster/weight */
+        local _nuis_cluster_idx 0
+        local _nuis_weight_idx 0
+        if "`cluster_var'" != "" | "`weight_var'" != "" {
+            local _nuis_data_col_count = `nindep' + 1
+            local _nuis_offset 0
+            if "`cluster_var'" != "" {
+                local _nuis_cluster_idx = `_nuis_data_col_count' + 1
+                local _nuis_offset 1
+            }
+            if "`weight_var'" != "" {
+                local _nuis_weight_idx = `_nuis_data_col_count' + `_nuis_offset' + 1
+            }
+        }
+
         /* Y ~ X regression forest */
-        plugin call grf_plugin `indepvars' `depvar' `yhat_nuis' ///
+        plugin call grf_plugin `indepvars' `depvar' `extra_vars' `yhat_nuis' ///
             if `touse',                                          ///
             "regression"                                         ///
             "`tunetrees'"                                        ///
@@ -328,10 +376,13 @@ program define grf_tune, rclass
             "1"                                                  ///
             "0"                                                  ///
             "0"                                                  ///
-            "1"
+            "1"                                                  ///
+            "`allow_missing_x'"                                  ///
+            "`_nuis_cluster_idx'"                                ///
+            "`_nuis_weight_idx'"
 
         /* W ~ X regression forest */
-        plugin call grf_plugin `indepvars' `treatvar' `what_nuis' ///
+        plugin call grf_plugin `indepvars' `treatvar' `extra_vars' `what_nuis' ///
             if `touse',                                            ///
             "regression"                                           ///
             "`tunetrees'"                                          ///
@@ -352,7 +403,10 @@ program define grf_tune, rclass
             "1"                                                    ///
             "0"                                                    ///
             "0"                                                    ///
-            "1"
+            "1"                                                    ///
+            "`allow_missing_x'"                                    ///
+            "`_nuis_cluster_idx'"                                  ///
+            "`_nuis_weight_idx'"
 
         /* Center Y and W */
         tempvar y_centered w_centered
@@ -369,8 +423,23 @@ program define grf_tune, rclass
         quietly gen double `what_nuis' = .
         quietly gen double `zhat_nuis' = .
 
+        /* Compute nuisance column indices for cluster/weight */
+        local _nuis_cluster_idx 0
+        local _nuis_weight_idx 0
+        if "`cluster_var'" != "" | "`weight_var'" != "" {
+            local _nuis_data_col_count = `nindep' + 1
+            local _nuis_offset 0
+            if "`cluster_var'" != "" {
+                local _nuis_cluster_idx = `_nuis_data_col_count' + 1
+                local _nuis_offset 1
+            }
+            if "`weight_var'" != "" {
+                local _nuis_weight_idx = `_nuis_data_col_count' + `_nuis_offset' + 1
+            }
+        }
+
         /* Y ~ X */
-        plugin call grf_plugin `indepvars' `depvar' `yhat_nuis' ///
+        plugin call grf_plugin `indepvars' `depvar' `extra_vars' `yhat_nuis' ///
             if `touse',                                          ///
             "regression"                                         ///
             "`tunetrees'"                                        ///
@@ -391,10 +460,13 @@ program define grf_tune, rclass
             "1"                                                  ///
             "0"                                                  ///
             "0"                                                  ///
-            "1"
+            "1"                                                  ///
+            "`allow_missing_x'"                                  ///
+            "`_nuis_cluster_idx'"                                ///
+            "`_nuis_weight_idx'"
 
         /* W ~ X */
-        plugin call grf_plugin `indepvars' `treatvar' `what_nuis' ///
+        plugin call grf_plugin `indepvars' `treatvar' `extra_vars' `what_nuis' ///
             if `touse',                                            ///
             "regression"                                           ///
             "`tunetrees'"                                          ///
@@ -415,10 +487,13 @@ program define grf_tune, rclass
             "1"                                                    ///
             "0"                                                    ///
             "0"                                                    ///
-            "1"
+            "1"                                                    ///
+            "`allow_missing_x'"                                    ///
+            "`_nuis_cluster_idx'"                                  ///
+            "`_nuis_weight_idx'"
 
         /* Z ~ X */
-        plugin call grf_plugin `indepvars' `instrument' `zhat_nuis' ///
+        plugin call grf_plugin `indepvars' `instrument' `extra_vars' `zhat_nuis' ///
             if `touse',                                              ///
             "regression"                                             ///
             "`tunetrees'"                                            ///
@@ -439,7 +514,10 @@ program define grf_tune, rclass
             "1"                                                      ///
             "0"                                                      ///
             "0"                                                      ///
-            "1"
+            "1"                                                      ///
+            "`allow_missing_x'"                                      ///
+            "`_nuis_cluster_idx'"                                    ///
+            "`_nuis_weight_idx'"
 
         tempvar y_centered w_centered z_centered
         quietly gen double `y_centered' = `depvar' - `yhat_nuis' if `touse'
@@ -452,10 +530,25 @@ program define grf_tune, rclass
     else if "`foresttype'" == "lm_forest" {
         display as text "Fitting nuisance models (Y ~ X, W_k ~ X) ..."
 
+        /* Compute nuisance column indices for cluster/weight */
+        local _nuis_cluster_idx 0
+        local _nuis_weight_idx 0
+        if "`cluster_var'" != "" | "`weight_var'" != "" {
+            local _nuis_data_col_count = `nindep' + 1
+            local _nuis_offset 0
+            if "`cluster_var'" != "" {
+                local _nuis_cluster_idx = `_nuis_data_col_count' + 1
+                local _nuis_offset 1
+            }
+            if "`weight_var'" != "" {
+                local _nuis_weight_idx = `_nuis_data_col_count' + `_nuis_offset' + 1
+            }
+        }
+
         /* Y ~ X */
         tempvar yhat_nuis
         quietly gen double `yhat_nuis' = .
-        plugin call grf_plugin `indepvars' `depvar' `yhat_nuis' ///
+        plugin call grf_plugin `indepvars' `depvar' `extra_vars' `yhat_nuis' ///
             if `touse',                                          ///
             "regression"                                         ///
             "`tunetrees'"                                        ///
@@ -476,7 +569,10 @@ program define grf_tune, rclass
             "1"                                                  ///
             "0"                                                  ///
             "0"                                                  ///
-            "1"
+            "1"                                                  ///
+            "`allow_missing_x'"                                  ///
+            "`_nuis_cluster_idx'"                                ///
+            "`_nuis_weight_idx'"
 
         /* W_k ~ X for each regressor */
         local w_centered_vars ""
@@ -484,7 +580,7 @@ program define grf_tune, rclass
             local wv : word `j' of `regvars'
             tempvar what_`j'
             quietly gen double `what_`j'' = .
-            plugin call grf_plugin `indepvars' `wv' `what_`j'' ///
+            plugin call grf_plugin `indepvars' `wv' `extra_vars' `what_`j'' ///
                 if `touse',                                     ///
                 "regression"                                    ///
                 "`tunetrees'"                                   ///
@@ -505,7 +601,10 @@ program define grf_tune, rclass
                 "1"                                             ///
                 "0"                                             ///
                 "0"                                             ///
-                "1"
+                "1"                                             ///
+                "`allow_missing_x'"                             ///
+                "`_nuis_cluster_idx'"                           ///
+                "`_nuis_weight_idx'"
 
             tempvar wc_`j'
             quietly gen double `wc_`j'' = `wv' - `what_`j'' if `touse'
@@ -521,10 +620,25 @@ program define grf_tune, rclass
     else if "`foresttype'" == "multi_arm_causal" {
         display as text "Fitting nuisance models (Y ~ X, W_k ~ X) ..."
 
+        /* Compute nuisance column indices for cluster/weight */
+        local _nuis_cluster_idx 0
+        local _nuis_weight_idx 0
+        if "`cluster_var'" != "" | "`weight_var'" != "" {
+            local _nuis_data_col_count = `nindep' + 1
+            local _nuis_offset 0
+            if "`cluster_var'" != "" {
+                local _nuis_cluster_idx = `_nuis_data_col_count' + 1
+                local _nuis_offset 1
+            }
+            if "`weight_var'" != "" {
+                local _nuis_weight_idx = `_nuis_data_col_count' + `_nuis_offset' + 1
+            }
+        }
+
         /* Y ~ X */
         tempvar yhat_nuis
         quietly gen double `yhat_nuis' = .
-        plugin call grf_plugin `indepvars' `depvar' `yhat_nuis' ///
+        plugin call grf_plugin `indepvars' `depvar' `extra_vars' `yhat_nuis' ///
             if `touse',                                          ///
             "regression"                                         ///
             "`tunetrees'"                                        ///
@@ -545,7 +659,10 @@ program define grf_tune, rclass
             "1"                                                  ///
             "0"                                                  ///
             "0"                                                  ///
-            "1"
+            "1"                                                  ///
+            "`allow_missing_x'"                                  ///
+            "`_nuis_cluster_idx'"                                ///
+            "`_nuis_weight_idx'"
 
         /* W_k ~ X for each treatment arm */
         local w_centered_vars ""
@@ -553,7 +670,7 @@ program define grf_tune, rclass
             local tv : word `j' of `treatvars'
             tempvar what_`j'
             quietly gen double `what_`j'' = .
-            plugin call grf_plugin `indepvars' `tv' `what_`j'' ///
+            plugin call grf_plugin `indepvars' `tv' `extra_vars' `what_`j'' ///
                 if `touse',                                     ///
                 "regression"                                    ///
                 "`tunetrees'"                                   ///
@@ -574,7 +691,10 @@ program define grf_tune, rclass
                 "1"                                             ///
                 "0"                                             ///
                 "0"                                             ///
-                "1"
+                "1"                                             ///
+                "`allow_missing_x'"                             ///
+                "`_nuis_cluster_idx'"                           ///
+                "`_nuis_weight_idx'"
 
             tempvar wc_`j'
             quietly gen double `wc_`j'' = `tv' - `what_`j'' if `touse'
@@ -590,9 +710,24 @@ program define grf_tune, rclass
     else if "`foresttype'" == "causal_survival" {
         display as text "Fitting nuisance model (W ~ X) ..."
 
+        /* Compute nuisance column indices for cluster/weight */
+        local _nuis_cluster_idx 0
+        local _nuis_weight_idx 0
+        if "`cluster_var'" != "" | "`weight_var'" != "" {
+            local _nuis_data_col_count = `nindep' + 1
+            local _nuis_offset 0
+            if "`cluster_var'" != "" {
+                local _nuis_cluster_idx = `_nuis_data_col_count' + 1
+                local _nuis_offset 1
+            }
+            if "`weight_var'" != "" {
+                local _nuis_weight_idx = `_nuis_data_col_count' + `_nuis_offset' + 1
+            }
+        }
+
         tempvar what_nuis
         quietly gen double `what_nuis' = .
-        plugin call grf_plugin `indepvars' `treatvar' `what_nuis' ///
+        plugin call grf_plugin `indepvars' `treatvar' `extra_vars' `what_nuis' ///
             if `touse',                                            ///
             "regression"                                           ///
             "`tunetrees'"                                          ///
@@ -613,7 +748,10 @@ program define grf_tune, rclass
             "1"                                                    ///
             "0"                                                    ///
             "0"                                                    ///
-            "1"
+            "1"                                                    ///
+            "`allow_missing_x'"                                    ///
+            "`_nuis_cluster_idx'"                                  ///
+            "`_nuis_weight_idx'"
 
         /* Simplified nuisance: IPCW approximation */
         tempvar w_centered cs_numer cs_denom
@@ -628,6 +766,57 @@ program define grf_tune, rclass
     else {
         display as text "Beginning random search ..."
         display as text ""
+    }
+
+    /* ---- Compute main tuning column indices for cluster/weight ---- */
+    local _main_cluster_idx 0
+    local _main_weight_idx 0
+    if "`cluster_var'" != "" | "`weight_var'" != "" {
+        if "`foresttype'" == "regression" {
+            local _data_col_count = `nindep' + 1
+        }
+        else if "`foresttype'" == "causal" {
+            local _data_col_count = `nindep' + 2
+        }
+        else if "`foresttype'" == "quantile" {
+            local _data_col_count = `nindep' + 1
+        }
+        else if "`foresttype'" == "probability" {
+            local _data_col_count = `nindep' + 1
+        }
+        else if "`foresttype'" == "instrumental" {
+            local _data_col_count = `nindep' + 3
+        }
+        else if "`foresttype'" == "survival" {
+            local _data_col_count = `nindep' + 2
+        }
+        else if "`foresttype'" == "ll_regression" {
+            local _data_col_count = `nindep' + 1
+        }
+        else if "`foresttype'" == "lm_forest" {
+            local _data_col_count = `nindep' + 1 + `n_regressors'
+        }
+        else if "`foresttype'" == "multi_arm_causal" {
+            local _data_col_count = `nindep' + 1 + `ntreat'
+        }
+        else if "`foresttype'" == "multi_regression" {
+            local _data_col_count = `nindep' + `ndep'
+        }
+        else if "`foresttype'" == "causal_survival" {
+            local _data_col_count = `nindep' + 5
+        }
+        else if "`foresttype'" == "boosted_regression" {
+            local _data_col_count = `nindep' + 1
+        }
+
+        local _main_offset 0
+        if "`cluster_var'" != "" {
+            local _main_cluster_idx = `_data_col_count' + 1
+            local _main_offset 1
+        }
+        if "`weight_var'" != "" {
+            local _main_weight_idx = `_data_col_count' + `_main_offset' + 1
+        }
     }
 
     /* ---- Random search loop ---- */
@@ -648,7 +837,7 @@ program define grf_tune, rclass
         /* ---- Fit candidate forest and get OOB predictions ---- */
 
         if "`foresttype'" == "regression" {
-            capture plugin call grf_plugin `indepvars' `depvar' `tune_pred' ///
+            capture plugin call grf_plugin `indepvars' `depvar' `extra_vars' `tune_pred' ///
                 if `touse',                                                  ///
                 "regression"                                                 ///
                 "`tunetrees'"                                                ///
@@ -669,7 +858,10 @@ program define grf_tune, rclass
                 "1"                                                          ///
                 "0"                                                          ///
                 "0"                                                          ///
-                "1"
+                "1"                                                          ///
+                "`allow_missing_x'"                                          ///
+                "`_main_cluster_idx'"                                        ///
+                "`_main_weight_idx'"
 
             if _rc {
                 capture drop `tune_pred'
@@ -684,7 +876,7 @@ program define grf_tune, rclass
             capture drop `sq_err'
         }
         else if "`foresttype'" == "causal" {
-            capture plugin call grf_plugin `indepvars' `y_centered' `w_centered' `tune_pred' ///
+            capture plugin call grf_plugin `indepvars' `y_centered' `w_centered' `extra_vars' `tune_pred' ///
                 if `touse',                                                                   ///
                 "causal"                                                                      ///
                 "`tunetrees'"                                                                 ///
@@ -706,6 +898,9 @@ program define grf_tune, rclass
                 "1"                                                                           ///
                 "0"                                                                           ///
                 "1"                                                                           ///
+                "`allow_missing_x'"                                                           ///
+                "`_main_cluster_idx'"                                                         ///
+                "`_main_weight_idx'"                                                          ///
                 "`do_stabilize'"
 
             if _rc {
@@ -723,7 +918,7 @@ program define grf_tune, rclass
         }
         else if "`foresttype'" == "quantile" {
             /* Tune on median prediction MSE */
-            capture plugin call grf_plugin `indepvars' `depvar' `tune_pred' ///
+            capture plugin call grf_plugin `indepvars' `depvar' `extra_vars' `tune_pred' ///
                 if `touse',                                                  ///
                 "quantile"                                                   ///
                 "`tunetrees'"                                                ///
@@ -745,6 +940,9 @@ program define grf_tune, rclass
                 "0"                                                          ///
                 "0"                                                          ///
                 "1"                                                          ///
+                "`allow_missing_x'"                                          ///
+                "`_main_cluster_idx'"                                        ///
+                "`_main_weight_idx'"                                         ///
                 "0.5"
 
             if _rc {
@@ -767,7 +965,7 @@ program define grf_tune, rclass
             quietly gen double `tune_pred_c1' = .
 
             /* For tuning, use 2-class output to get P(Y=0) and P(Y=1) */
-            capture plugin call grf_plugin `indepvars' `depvar' `tune_pred_c0' `tune_pred_c1' ///
+            capture plugin call grf_plugin `indepvars' `depvar' `extra_vars' `tune_pred_c0' `tune_pred_c1' ///
                 if `touse',                                                                    ///
                 "probability"                                                                  ///
                 "`tunetrees'"                                                                  ///
@@ -789,6 +987,9 @@ program define grf_tune, rclass
                 "0"                                                                            ///
                 "0"                                                                            ///
                 "`nclasses'"                                                                   ///
+                "`allow_missing_x'"                                                            ///
+                "`_main_cluster_idx'"                                                          ///
+                "`_main_weight_idx'"                                                           ///
                 "`nclasses'"
 
             if _rc {
@@ -807,7 +1008,7 @@ program define grf_tune, rclass
         else if "`foresttype'" == "instrumental" {
             /* Instrumental forest: tune on pseudo-outcome residual MSE */
             capture plugin call grf_plugin `indepvars' `y_centered' `w_centered' ///
-                `z_centered' `tune_pred'                                          ///
+                `z_centered' `extra_vars' `tune_pred'                             ///
                 if `touse',                                                       ///
                 "instrumental"                                                    ///
                 "`tunetrees'"                                                     ///
@@ -829,6 +1030,9 @@ program define grf_tune, rclass
                 "1"                                                               ///
                 "1"                                                               ///
                 "1"                                                               ///
+                "`allow_missing_x'"                                               ///
+                "`_main_cluster_idx'"                                             ///
+                "`_main_weight_idx'"                                              ///
                 "`reducedformweight'"                                             ///
                 "`do_stabilize'"
 
@@ -847,7 +1051,7 @@ program define grf_tune, rclass
         }
         else if "`foresttype'" == "survival" {
             /* Survival forest: tune on first survival curve column MSE vs event indicator */
-            capture plugin call grf_plugin `indepvars' `timevar' `statusvar' `tune_pred' ///
+            capture plugin call grf_plugin `indepvars' `timevar' `statusvar' `extra_vars' `tune_pred' ///
                 if `touse',                                                               ///
                 "survival"                                                                ///
                 "`tunetrees'"                                                             ///
@@ -869,6 +1073,9 @@ program define grf_tune, rclass
                 "0"                                                                       ///
                 "0"                                                                       ///
                 "1"                                                                       ///
+                "`allow_missing_x'"                                                       ///
+                "`_main_cluster_idx'"                                                     ///
+                "`_main_weight_idx'"                                                      ///
                 "`numfailures'"                                                           ///
                 "`=1 - `predtype''"
 
@@ -887,7 +1094,7 @@ program define grf_tune, rclass
         }
         else if "`foresttype'" == "ll_regression" {
             /* Local linear regression forest: same as regression but different plugin call */
-            capture plugin call grf_plugin `indepvars' `depvar' `tune_pred' ///
+            capture plugin call grf_plugin `indepvars' `depvar' `extra_vars' `tune_pred' ///
                 if `touse',                                                  ///
                 "ll_regression"                                              ///
                 "`tunetrees'"                                                ///
@@ -909,6 +1116,9 @@ program define grf_tune, rclass
                 "0"                                                          ///
                 "0"                                                          ///
                 "1"                                                          ///
+                "`allow_missing_x'"                                          ///
+                "`_main_cluster_idx'"                                        ///
+                "`_main_weight_idx'"                                         ///
                 "0"                                                          ///
                 "0.1"                                                        ///
                 "0"                                                          ///
@@ -936,7 +1146,7 @@ program define grf_tune, rclass
                 local tune_output_vars `tune_output_vars' `tune_coef_`j''
             }
 
-            capture plugin call grf_plugin `indepvars' `y_centered' `w_centered_vars' `tune_output_vars' ///
+            capture plugin call grf_plugin `indepvars' `y_centered' `w_centered_vars' `extra_vars' `tune_output_vars' ///
                 if `touse',                                                                               ///
                 "lm_forest"                                                                              ///
                 "`tunetrees'"                                                                            ///
@@ -958,6 +1168,9 @@ program define grf_tune, rclass
                 "`n_regressors'"                                                                         ///
                 "0"                                                                                      ///
                 "`n_regressors'"                                                                         ///
+                "`allow_missing_x'"                                                                      ///
+                "`_main_cluster_idx'"                                                                    ///
+                "`_main_weight_idx'"                                                                     ///
                 "`do_stabilize'"
 
             if _rc {
@@ -995,7 +1208,7 @@ program define grf_tune, rclass
                 local tune_output_vars `tune_output_vars' `tune_tau_`j''
             }
 
-            capture plugin call grf_plugin `indepvars' `y_centered' `w_centered_vars' `tune_output_vars' ///
+            capture plugin call grf_plugin `indepvars' `y_centered' `w_centered_vars' `extra_vars' `tune_output_vars' ///
                 if `touse',                                                                               ///
                 "multi_arm_causal"                                                                       ///
                 "`tunetrees'"                                                                            ///
@@ -1017,6 +1230,9 @@ program define grf_tune, rclass
                 "`ntreat'"                                                                               ///
                 "0"                                                                                      ///
                 "`ntreat'"                                                                               ///
+                "`allow_missing_x'"                                                                      ///
+                "`_main_cluster_idx'"                                                                    ///
+                "`_main_weight_idx'"                                                                     ///
                 "`do_stabilize'"                                                                         ///
                 "`ntreat'"
 
@@ -1055,7 +1271,7 @@ program define grf_tune, rclass
                 local tune_output_vars `tune_output_vars' `tune_yhat_`j''
             }
 
-            capture plugin call grf_plugin `indepvars' `depvars' `tune_output_vars' ///
+            capture plugin call grf_plugin `indepvars' `depvars' `extra_vars' `tune_output_vars' ///
                 if `touse',                                                          ///
                 "multi_regression"                                                   ///
                 "`tunetrees'"                                                        ///
@@ -1077,6 +1293,9 @@ program define grf_tune, rclass
                 "0"                                                                  ///
                 "0"                                                                  ///
                 "`ndep'"                                                             ///
+                "`allow_missing_x'"                                                  ///
+                "`_main_cluster_idx'"                                                ///
+                "`_main_weight_idx'"                                                 ///
                 "`ndep'"
 
             if _rc {
@@ -1106,7 +1325,7 @@ program define grf_tune, rclass
         else if "`foresttype'" == "causal_survival" {
             /* Causal survival: tune the main forest */
             capture plugin call grf_plugin `indepvars' `timevar' `w_centered' ///
-                `statusvar' `cs_numer' `cs_denom' `tune_pred'                  ///
+                `statusvar' `cs_numer' `cs_denom' `extra_vars' `tune_pred'     ///
                 if `touse',                                                    ///
                 "causal_survival"                                              ///
                 "`tunetrees'"                                                  ///
@@ -1128,6 +1347,9 @@ program define grf_tune, rclass
                 "1"                                                            ///
                 "0"                                                            ///
                 "1"                                                            ///
+                "`allow_missing_x'"                                            ///
+                "`_main_cluster_idx'"                                          ///
+                "`_main_weight_idx'"                                           ///
                 "`do_stabilize'"                                               ///
                 "`=`nindep'+3'"                                                ///
                 "`=`nindep'+4'"                                                ///
@@ -1152,7 +1374,7 @@ program define grf_tune, rclass
         }
         else if "`foresttype'" == "boosted_regression" {
             /* Boosted regression: use single-step (booststeps=1) for tuning */
-            capture plugin call grf_plugin `indepvars' `depvar' `tune_pred' ///
+            capture plugin call grf_plugin `indepvars' `depvar' `extra_vars' `tune_pred' ///
                 if `touse',                                                  ///
                 "boosted_regression"                                         ///
                 "`tunetrees'"                                                ///
@@ -1174,6 +1396,9 @@ program define grf_tune, rclass
                 "0"                                                          ///
                 "0"                                                          ///
                 "1"                                                          ///
+                "`allow_missing_x'"                                          ///
+                "`_main_cluster_idx'"                                        ///
+                "`_main_weight_idx'"                                         ///
                 "1"                                                          ///
                 "0.97"                                                       ///
                 "5"                                                          ///

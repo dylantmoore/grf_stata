@@ -23,6 +23,10 @@ program define grf_regression_forest, eclass
             ESTIMATEVariance                   ///
             REPlace                            ///
             VARGenerate(name)                  ///
+            noMIA                              ///
+            CLuster(varname numeric)           ///
+            WEIghts(varname numeric)           ///
+            EQUALizeclusterweights             ///
         ]
 
     /* ---- Parse honesty ---- */
@@ -55,6 +59,42 @@ program define grf_regression_forest, eclass
     }
     confirm new variable `generate'
 
+    /* ---- Parse MIA ---- */
+    local allow_missing_x 1
+    if "`mia'" == "nomia" {
+        local allow_missing_x 0
+    }
+
+    /* ---- Parse cluster ---- */
+    local cluster_col_idx 0
+    if "`cluster'" != "" {
+        local cluster_var `cluster'
+    }
+
+    /* ---- Parse weights ---- */
+    local weight_col_idx 0
+    if "`weights'" != "" {
+        local weight_var `weights'
+    }
+
+    /* ---- Parse equalize cluster weights ---- */
+    if "`equalizeclusterweights'" != "" {
+        if "`cluster'" == "" {
+            display as error "equalizeclusterweights requires cluster() option"
+            exit 198
+        }
+        /* Compute 1/cluster_size for each observation */
+        tempvar _eq_clsize _eq_wt
+        quietly bysort `cluster': gen long `_eq_clsize' = _N if `touse'
+        quietly gen double `_eq_wt' = 1.0 / `_eq_clsize' if `touse'
+        /* Combine with existing weights if any */
+        if "`weight_var'" != "" {
+            quietly replace `_eq_wt' = `_eq_wt' * `weight_var' if `touse'
+        }
+        /* Use equalized weights as the weight variable */
+        local weight_var `_eq_wt'
+    }
+
     /* ---- Parse varlist ---- */
     gettoken depvar indepvars : varlist
     local nindep : word count `indepvars'
@@ -65,7 +105,19 @@ program define grf_regression_forest, eclass
     }
 
     /* ---- Mark sample ---- */
-    marksample touse
+    if `allow_missing_x' {
+        marksample touse, novarlist
+        markout `touse' `depvar'
+        if "`cluster_var'" != "" {
+            markout `touse' `cluster_var'
+        }
+        if "`weight_var'" != "" {
+            markout `touse' `weight_var'
+        }
+    }
+    else {
+        marksample touse
+    }
     quietly count if `touse'
     local n_use = r(N)
 
@@ -109,8 +161,7 @@ program define grf_regression_forest, eclass
     if ( inlist("`c(os)'", "MacOSX") | strpos("`c(machine_type)'", "Mac") ) local c_os_ macosx
     else local c_os_: di lower("`c(os)'")
 
-    cap program drop grf_plugin
-    program grf_plugin, plugin using("grf_plugin_`c_os_'.plugin")
+    capture program grf_plugin, plugin using("grf_plugin_`c_os_'.plugin")
 
     /* ---- Build output varlist ---- */
     local output_vars `generate'
@@ -118,15 +169,39 @@ program define grf_regression_forest, eclass
         local output_vars `generate' `vargenerate'
     }
 
+    /* ---- Build plugin varlist with optional cluster/weight columns ---- */
+    local extra_vars ""
+    if "`cluster_var'" != "" {
+        local extra_vars `extra_vars' `cluster_var'
+    }
+    if "`weight_var'" != "" {
+        local extra_vars `extra_vars' `weight_var'
+    }
+
+    /* Compute cluster/weight column indices in the plugin varlist */
+    /* Regression forest data vars: X1..Xp Y => nindep + 1 columns */
+    local _data_col_count = `nindep' + 1
+    if "`cluster_var'" != "" {
+        local cluster_col_idx = `_data_col_count' + 1
+    }
+    if "`weight_var'" != "" {
+        local _offset = 0
+        if "`cluster_var'" != "" {
+            local _offset = 1
+        }
+        local weight_col_idx = `_data_col_count' + `_offset' + 1
+    }
+
     /* ---- Call plugin ----
      *
-     * Variable order: X1..Xp Y out1 [out2]
+     * Variable order: X1..Xp Y [cluster] [weight] out1 [out2]
      * argv: forest_type num_trees seed mtry min_node_size sample_fraction
      *       honesty honesty_fraction honesty_prune alpha imbalance_penalty
      *       ci_group_size num_threads estimate_variance compute_oob
      *       n_x n_y n_w n_z n_output
+     *       allow_missing_x cluster_col_idx weight_col_idx
      */
-    plugin call grf_plugin `indepvars' `depvar' `output_vars' ///
+    plugin call grf_plugin `indepvars' `depvar' `extra_vars' `output_vars' ///
         if `touse',                                            ///
         "regression"                                           ///
         "`ntrees'"                                             ///
@@ -147,7 +222,10 @@ program define grf_regression_forest, eclass
         "1"                                                    ///
         "0"                                                    ///
         "0"                                                    ///
-        "`n_output'"
+        "`n_output'"                                           ///
+        "`allow_missing_x'"                                    ///
+        "`cluster_col_idx'"                                    ///
+        "`weight_col_idx'"
 
     /* ---- Store results ---- */
     ereturn clear
@@ -164,12 +242,19 @@ program define grf_regression_forest, eclass
     ereturn scalar imbalance_penalty  = `imbalancepenalty'
     ereturn scalar ci_group_size      = `cigroupsize'
     ereturn local  cmd           "grf_regression_forest"
+    ereturn scalar allow_missing_x = `allow_missing_x'
     ereturn local  forest_type   "regression"
     ereturn local  depvar        "`depvar'"
     ereturn local  indepvars     "`indepvars'"
     ereturn local  predict_var   "`generate'"
     if `do_est_var' {
         ereturn local variance_var "`vargenerate'"
+    }
+    if "`cluster_var'" != "" {
+        ereturn local cluster_var "`cluster_var'"
+    }
+    if "`weight_var'" != "" {
+        ereturn local weight_var "`weight_var'"
     }
 
     /* ---- Summary stats ---- */

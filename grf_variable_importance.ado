@@ -10,6 +10,7 @@ program define grf_variable_importance, rclass
             NTrees(integer 2000)               ///
             SEED(integer 42)                   ///
             MAXDepth(integer 4)                ///
+            DECAYexponent(real 2.0)            ///
         ]
 
     /* ---- Parse varlist ---- */
@@ -44,6 +45,7 @@ program define grf_variable_importance, rclass
     display as text "Observations:          " as result `n_use'
     display as text "Trees:                 " as result `ntrees'
     display as text "Max depth:             " as result `maxdepth'
+    display as text "Decay exponent:        " as result `decayexponent'
     display as text "{hline 55}"
     display as text ""
 
@@ -51,8 +53,7 @@ program define grf_variable_importance, rclass
     if ( inlist("`c(os)'", "MacOSX") | strpos("`c(machine_type)'", "Mac") ) local c_os_ macosx
     else local c_os_: di lower("`c(os)'")
 
-    cap program drop grf_plugin
-    program grf_plugin, plugin using("grf_plugin_`c_os_'.plugin")
+    capture program grf_plugin, plugin using("grf_plugin_`c_os_'.plugin")
 
     /* ---- Call plugin ----
      *
@@ -85,7 +86,11 @@ program define grf_variable_importance, rclass
         "0"                                                ///
         "0"                                                ///
         "1"                                                ///
-        "`maxdepth'"
+        "1"                                                ///
+        "0"                                                ///
+        "0"                                                ///
+        "`maxdepth'"                                                 ///
+        "`decayexponent'"
 
     /* ---- Read scalars and build results ---- */
     local vi_n = scalar(_grf_vi_n)

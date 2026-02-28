@@ -30,6 +30,10 @@ program define grf_multi_regression_forest, eclass
             NUMThreads(integer 0)              ///
             ESTIMATEVariance                   ///
             REPlace                            ///
+            noMIA                              ///
+            CLuster(varname numeric)           ///
+            WEIghts(varname numeric)           ///
+            EQUALizeclusterweights             ///
         ]
 
     /* ---- Validate ndep ---- */
@@ -58,6 +62,42 @@ program define grf_multi_regression_forest, eclass
         display as text "(warning: estimatevariance not supported for multi_regression_forest; ignored)"
     }
 
+    /* ---- Parse MIA ---- */
+    local allow_missing_x 1
+    if "`mia'" == "nomia" {
+        local allow_missing_x 0
+    }
+
+    /* ---- Parse cluster ---- */
+    local cluster_col_idx 0
+    if "`cluster'" != "" {
+        local cluster_var `cluster'
+    }
+
+    /* ---- Parse weights ---- */
+    local weight_col_idx 0
+    if "`weights'" != "" {
+        local weight_var `weights'
+    }
+
+    /* ---- Parse equalize cluster weights ---- */
+    if "`equalizeclusterweights'" != "" {
+        if "`cluster'" == "" {
+            display as error "equalizeclusterweights requires cluster() option"
+            exit 198
+        }
+        /* Compute 1/cluster_size for each observation */
+        tempvar _eq_clsize _eq_wt
+        quietly bysort `cluster': gen long `_eq_clsize' = _N if `touse'
+        quietly gen double `_eq_wt' = 1.0 / `_eq_clsize' if `touse'
+        /* Combine with existing weights if any */
+        if "`weight_var'" != "" {
+            quietly replace `_eq_wt' = `_eq_wt' * `weight_var' if `touse'
+        }
+        /* Use equalized weights as the weight variable */
+        local weight_var `_eq_wt'
+    }
+
     /* ---- Parse varlist: Y1 Y2 ... X1 X2 ... ---- */
     local depvars ""
     local rest `varlist'
@@ -84,7 +124,21 @@ program define grf_multi_regression_forest, eclass
     }
 
     /* ---- Mark sample ---- */
-    marksample touse
+    if `allow_missing_x' {
+        marksample touse, novarlist
+        foreach dv of local depvars {
+            markout `touse' `dv'
+        }
+        if "`cluster_var'" != "" {
+            markout `touse' `cluster_var'
+        }
+        if "`weight_var'" != "" {
+            markout `touse' `weight_var'
+        }
+    }
+    else {
+        marksample touse
+    }
     quietly count if `touse'
     local n_use = r(N)
 
@@ -143,22 +197,35 @@ program define grf_multi_regression_forest, eclass
     if ( inlist("`c(os)'", "MacOSX") | strpos("`c(machine_type)'", "Mac") ) local c_os_ macosx
     else local c_os_: di lower("`c(os)'")
 
-    cap program drop grf_plugin
-    program grf_plugin, plugin using("grf_plugin_`c_os_'.plugin")
+    capture program grf_plugin, plugin using("grf_plugin_`c_os_'.plugin")
+
+    /* ---- Build extra vars for cluster/weight ---- */
+    local extra_vars ""
+    local n_data_before = `nindep' + `ndep'
+    if "`cluster_var'" != "" {
+        local extra_vars `extra_vars' `cluster_var'
+        local cluster_col_idx = `n_data_before' + 1
+        local n_data_before = `n_data_before' + 1
+    }
+    if "`weight_var'" != "" {
+        local extra_vars `extra_vars' `weight_var'
+        local weight_col_idx = `n_data_before' + 1
+    }
 
     /* ---- Call plugin ----
      *
-     * Variable order: X1..Xp Y1 Y2 ... out_y1 [out_y1_var] out_y2 [out_y2_var] ...
+     * Variable order: X1..Xp Y1 Y2 ... [cluster] [weight] out_y1 [out_y1_var] out_y2 [out_y2_var] ...
      *   n_x = nindep (covariates)
      *   n_y = ndep (multiple outcome columns)
      *   n_w = 0
      *   n_z = 0
      *   n_output = ndep (or ndep*2 with variance)
      *
-     * argv[20]: num_outcomes
+     * argv[20-22]: allow_missing_x, cluster_col_idx, weight_col_idx
+     * argv[23]: num_outcomes
      */
     display as text "Fitting multi-output regression forest ..."
-    plugin call grf_plugin `indepvars' `depvars' `output_vars' ///
+    plugin call grf_plugin `indepvars' `depvars' `extra_vars' `output_vars' ///
         if `touse',                                             ///
         "multi_regression"                                      ///
         "`ntrees'"                                              ///
@@ -180,6 +247,9 @@ program define grf_multi_regression_forest, eclass
         "0"                                                     ///
         "0"                                                     ///
         "`n_output'"                                            ///
+        "`allow_missing_x'"                                     ///
+        "`cluster_col_idx'"                                     ///
+        "`weight_col_idx'"                                      ///
         "`ndep'"
 
     /* ---- Store results ---- */
@@ -198,10 +268,17 @@ program define grf_multi_regression_forest, eclass
     ereturn scalar ci_group_size      = `cigroupsize'
     ereturn scalar n_outcomes  = `ndep'
     ereturn local  cmd           "grf_multi_regression_forest"
+    ereturn scalar allow_missing_x = `allow_missing_x'
     ereturn local  forest_type   "multi_regression"
     ereturn local  depvars       "`depvars'"
     ereturn local  indepvars     "`indepvars'"
     ereturn local  predict_stub  "`generate'"
+    if "`cluster_var'" != "" {
+        ereturn local cluster_var "`cluster_var'"
+    }
+    if "`weight_var'" != "" {
+        ereturn local weight_var "`weight_var'"
+    }
 
     /* ---- Summary stats ---- */
     display as text ""
