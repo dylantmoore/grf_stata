@@ -905,6 +905,28 @@ else {
     local errors = `errors' + 1
 }
 
+* ---- E5.7b: TMLE + debiasingweights errors out ----
+capture {
+    clear
+    set obs 200
+    set seed 42
+    gen x1 = rnormal()
+    gen x2 = rnormal()
+    gen w = rbinomial(1, 0.5)
+    gen y = x1 + w + rnormal()
+    gen dbwt = abs(x1) + 0.5
+
+    grf_causal_forest y w x1 x2, gen(tau_db_err) ntrees(50) seed(42)
+    grf_ate, method(TMLE) debiasingweights(dbwt)
+}
+if _rc {
+    display as result "PASS: E5.7b TMLE + debiasingweights errors"
+}
+else {
+    display as error "FAIL: E5.7b should error with method(TMLE) debiasingweights()"
+    local errors = `errors' + 1
+}
+
 * ---- E5.8: regression.splitting quantile forest ----
 capture noisily {
     clear

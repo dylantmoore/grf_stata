@@ -31,6 +31,11 @@ program define grf_ate, rclass
         exit 198
     }
 
+    if "`method'" == "TMLE" & "`debiasingweights'" != "" {
+        display as error "method(TMLE) does not support debiasingweights()"
+        exit 198
+    }
+
     /* ---- Default and validate target.sample ---- */
     if "`targetsample'" == "" {
         local targetsample "all"
@@ -56,6 +61,12 @@ program define grf_ate, rclass
     if `n_use' < 2 {
         display as error "need at least 2 non-missing observations"
         exit 2000
+    }
+
+    /* ---- TMLE + overlap: redirect to AIPW ---- */
+    if "`method'" == "TMLE" & "`targetsample'" == "overlap" {
+        display as text "Note: TMLE not applicable for overlap weights; using AIPW."
+        local method "AIPW"
     }
 
     if "`method'" == "AIPW" {
@@ -153,299 +164,267 @@ program define grf_ate, rclass
     }
 
     }
-    else if "`method'" == "TMLE" {
+    else {
 
     /* ---- Compute TMLE (Targeted Maximum Likelihood Estimation) ----
      *
      * TMLE corrects the initial CATE estimates via targeted bias correction.
-     * For target.sample=="overlap", TMLE is not applicable; fall back to AIPW.
-     *
      * Note: All regressions are computed manually (OLS formula) to avoid
      * clobbering e() results from grf_causal_forest.
      */
 
-    if "`targetsample'" == "overlap" {
-        display as text "Note: TMLE not applicable for overlap weights; using AIPW."
-        local method "AIPW"
-    }
+    /* Step 1: Initial potential outcome estimates */
+    tempvar yhat0 yhat1
+    quietly gen double `yhat0' = `yhatvar' - `tauvar' * `whatvar' if `touse'
+    quietly gen double `yhat1' = `yhatvar' + `tauvar' * (1 - `whatvar') if `touse'
 
-    if "`method'" == "AIPW" {
-        /* Overlap fallback: replicate AIPW logic inline */
-        tempvar w_resid y_resid dr_score
-        quietly gen double `w_resid' = `treatvar' - `whatvar' if `touse'
-        quietly summarize `w_resid' if `touse'
-        local w_resid_var = r(Var)
-        if `w_resid_var' < 1e-12 {
-            display as error "variance of treatment residuals is near zero"
-            exit 498
-        }
-        quietly {
-            gen double `y_resid' = `depvar' - `yhatvar' - `tauvar' * `w_resid' if `touse'
-            gen double `dr_score' = `tauvar' + (`w_resid' / `w_resid_var') * `y_resid' if `touse'
-        }
-        if "`debiasingweights'" != "" {
-            confirm numeric variable `debiasingweights'
-            markout `touse' `debiasingweights'
-            quietly count if `touse'
-            local n_use = r(N)
-            tempvar dw_dr
-            quietly gen double `dw_dr' = `dr_score' * `debiasingweights' if `touse'
-            quietly replace `dr_score' = `dw_dr' if `touse'
-        }
-        tempvar tsweight
-        quietly gen double `tsweight' = `whatvar' * (1 - `whatvar') if `touse'
-        quietly summarize `tsweight' if `touse'
-        local sum_wt = r(sum)
-        if `sum_wt' < 1e-12 {
-            display as error "sum of target.sample weights is zero"
-            exit 498
-        }
-        tempvar wt_dr
-        quietly gen double `wt_dr' = `tsweight' * `dr_score' if `touse'
-        quietly summarize `wt_dr' if `touse'
-        local ate = r(sum) / `sum_wt'
-        if "`cluster_var'" != "" {
-            confirm numeric variable `cluster_var'
-            tempvar wt_dev cl_sum cl_tag cl_sum_sq
-            quietly gen double `wt_dev' = `tsweight' * (`dr_score' - `ate') if `touse'
-            quietly bysort `cluster_var': egen double `cl_sum' = total(`wt_dev') if `touse'
-            quietly bysort `cluster_var': gen byte `cl_tag' = (_n == 1) if `touse'
-            quietly gen double `cl_sum_sq' = `cl_sum'^2 if `cl_tag' & `touse'
-            quietly summarize `cl_sum_sq' if `cl_tag' & `touse'
-            local se = sqrt(r(sum)) / `sum_wt'
-        }
-        else {
-            tempvar wt_dev_sq
-            quietly gen double `wt_dev_sq' = ///
-                `tsweight'^2 * (`dr_score' - `ate')^2 if `touse'
-            quietly summarize `wt_dev_sq' if `touse'
-            local se = sqrt(r(sum)) / `sum_wt'
-        }
-    }
-    else {
-        /* ---- True TMLE path ---- */
+    if "`targetsample'" == "all" {
+        /* ---- TMLE for ATE (all) ----
+         * Controls (W=0): regress (Y - Y.hat.0) on 1/(1-W.hat), no intercept => epsilon0
+         * Treated (W=1): regress (Y - Y.hat.1) on 1/W.hat, no intercept => epsilon1
+         * DR correction uses full-sample means of clever covariates (matching R's grf).
+         */
+        tempvar resid0 clever0 resid1 clever1
+        quietly gen double `resid0' = `depvar' - `yhat0' if `touse' & `treatvar' == 0
+        quietly gen double `clever0' = 1 / (1 - `whatvar') if `touse' & `treatvar' == 0
+        quietly gen double `resid1' = `depvar' - `yhat1' if `touse' & `treatvar' == 1
+        quietly gen double `clever1' = 1 / `whatvar' if `touse' & `treatvar' == 1
 
-        /* Step 1: Initial potential outcome estimates */
-        tempvar yhat0 yhat1
-        quietly gen double `yhat0' = `yhatvar' - `tauvar' * `whatvar' if `touse'
-        quietly gen double `yhat1' = `yhatvar' + `tauvar' * (1 - `whatvar') if `touse'
+        /* Manual OLS (no intercept): epsilon = sum(X*Y) / sum(X^2) */
+        tempvar _xy0 _xx0 _xy1 _xx1
+        quietly gen double `_xy0' = `clever0' * `resid0' if `touse' & `treatvar' == 0
+        quietly gen double `_xx0' = `clever0'^2 if `touse' & `treatvar' == 0
+        quietly summarize `_xy0' if `touse' & `treatvar' == 0
+        local _sum_xy0 = r(sum)
+        quietly summarize `_xx0' if `touse' & `treatvar' == 0
+        local epsilon0 = `_sum_xy0' / r(sum)
 
-        /* Step 2: Average initial CATE */
+        quietly gen double `_xy1' = `clever1' * `resid1' if `touse' & `treatvar' == 1
+        quietly gen double `_xx1' = `clever1'^2 if `touse' & `treatvar' == 1
+        quietly summarize `_xy1' if `touse' & `treatvar' == 1
+        local _sum_xy1 = r(sum)
+        quietly summarize `_xx1' if `touse' & `treatvar' == 1
+        local epsilon1 = `_sum_xy1' / r(sum)
+
+        /* Step 5: DR correction -- full-sample means (R: mean(1/e), mean(1/(1-e))) */
         quietly summarize `tauvar' if `touse'
         local tau_avg = r(mean)
 
-        if "`targetsample'" == "all" {
-            /* ---- TMLE for ATE (all) ----
-             * Controls (W=0): regress (Y - Y.hat.0) on 1/(1-W.hat), no intercept => epsilon0
-             * Treated (W=1): regress (Y - Y.hat.1) on 1/W.hat, no intercept => epsilon1
-             */
-            tempvar resid0 clever0 resid1 clever1
-            quietly gen double `resid0' = `depvar' - `yhat0' if `touse' & `treatvar' == 0
-            quietly gen double `clever0' = 1 / (1 - `whatvar') if `touse' & `treatvar' == 0
-            quietly gen double `resid1' = `depvar' - `yhat1' if `touse' & `treatvar' == 1
-            quietly gen double `clever1' = 1 / `whatvar' if `touse' & `treatvar' == 1
+        tempvar inv_e inv_1me
+        quietly gen double `inv_e' = 1 / `whatvar' if `touse'
+        quietly gen double `inv_1me' = 1 / (1 - `whatvar') if `touse'
+        quietly summarize `inv_e' if `touse'
+        local mean_clever1 = r(mean)
+        quietly summarize `inv_1me' if `touse'
+        local mean_clever0 = r(mean)
 
-            /* Manual OLS (no intercept): epsilon = sum(X*Y) / sum(X^2) */
-            tempvar _xy0 _xx0 _xy1 _xx1
-            quietly gen double `_xy0' = `clever0' * `resid0' if `touse' & `treatvar' == 0
-            quietly gen double `_xx0' = `clever0'^2 if `touse' & `treatvar' == 0
-            quietly summarize `_xy0' if `touse' & `treatvar' == 0
-            local _sum_xy0 = r(sum)
-            quietly summarize `_xx0' if `touse' & `treatvar' == 0
-            local epsilon0 = `_sum_xy0' / r(sum)
+        local dr_correction = `epsilon1' * `mean_clever1' - `epsilon0' * `mean_clever0'
 
-            quietly gen double `_xy1' = `clever1' * `resid1' if `touse' & `treatvar' == 1
-            quietly gen double `_xx1' = `clever1'^2 if `touse' & `treatvar' == 1
-            quietly summarize `_xy1' if `touse' & `treatvar' == 1
-            local _sum_xy1 = r(sum)
-            quietly summarize `_xx1' if `touse' & `treatvar' == 1
-            local epsilon1 = `_sum_xy1' / r(sum)
+        /* Step 6: ATE */
+        local ate = `tau_avg' + `dr_correction'
 
-            /* Step 5: DR correction */
-            quietly summarize `clever1' if `touse' & `treatvar' == 1
-            local mean_clever1 = r(mean)
-            quietly count if `touse' & `treatvar' == 1
-            local n1 = r(N)
+        /* Step 7: Sandwich SE (standard TMLE influence function) */
+        tempvar psi yhat0_star yhat1_star
+        quietly gen double `yhat0_star' = `yhat0' + `epsilon0' / (1 - `whatvar') if `touse'
+        quietly gen double `yhat1_star' = `yhat1' + `epsilon1' / `whatvar' if `touse'
+        quietly gen double `psi' = (`yhat1_star' - `yhat0_star') - `ate' ///
+            + `treatvar' / `whatvar' * (`depvar' - `yhat1_star') ///
+            - (1 - `treatvar') / (1 - `whatvar') * (`depvar' - `yhat0_star') if `touse'
 
-            quietly summarize `clever0' if `touse' & `treatvar' == 0
-            local mean_clever0 = r(mean)
-            quietly count if `touse' & `treatvar' == 0
-            local n0 = r(N)
-
-            local dr_correction = `epsilon1' * `mean_clever1' - `epsilon0' * `mean_clever0'
-
-            /* Step 6: ATE */
-            local ate = `tau_avg' + `dr_correction'
-
-            /* Step 7: Sandwich SE */
-            /* Influence function: psi_i for each obs */
-            tempvar psi
-            quietly gen double `psi' = . if `touse'
-            /* Treated: psi = tau_hat - ate + clever1 * (Y - yhat1 - epsilon1 * clever1) ... simplified:
-             * Use the standard TMLE influence function:
-             * psi_i = (yhat1* - yhat0*) - ate + W*clever1*(Y-yhat1*) - (1-W)*clever0*(Y-yhat0*)
-             * where yhat1* = yhat1 + epsilon1/W.hat, yhat0* = yhat0 + epsilon0/(1-W.hat)
-             */
-            tempvar yhat0_star yhat1_star
-            quietly gen double `yhat0_star' = `yhat0' + `epsilon0' / (1 - `whatvar') if `touse'
-            quietly gen double `yhat1_star' = `yhat1' + `epsilon1' / `whatvar' if `touse'
-            quietly replace `psi' = (`yhat1_star' - `yhat0_star') - `ate' ///
-                + `treatvar' / `whatvar' * (`depvar' - `yhat1_star') ///
-                - (1 - `treatvar') / (1 - `whatvar') * (`depvar' - `yhat0_star') if `touse'
-
-            if "`cluster_var'" != "" {
-                confirm numeric variable `cluster_var'
-                tempvar cl_psi cl_tag_t cl_psi_sq
-                quietly bysort `cluster_var': egen double `cl_psi' = total(`psi') if `touse'
-                quietly bysort `cluster_var': gen byte `cl_tag_t' = (_n == 1) if `touse'
-                quietly gen double `cl_psi_sq' = `cl_psi'^2 if `cl_tag_t' & `touse'
-                quietly summarize `cl_psi_sq' if `cl_tag_t' & `touse'
-                local se = sqrt(r(sum)) / `n_use'
-            }
-            else {
-                quietly summarize `psi' if `touse'
-                local se = r(sd) / sqrt(`n_use')
-            }
+        if "`cluster_var'" != "" {
+            confirm numeric variable `cluster_var'
+            tempvar cl_psi cl_tag_t cl_psi_sq
+            quietly bysort `cluster_var': egen double `cl_psi' = total(`psi') if `touse'
+            quietly bysort `cluster_var': gen byte `cl_tag_t' = (_n == 1) if `touse'
+            quietly gen double `cl_psi_sq' = `cl_psi'^2 if `cl_tag_t' & `touse'
+            quietly summarize `cl_psi_sq' if `cl_tag_t' & `touse'
+            local se = sqrt(r(sum)) / `n_use'
         }
-        else if "`targetsample'" == "treated" {
-            /* TMLE for ATT: fit control regression with weights W.hat/(1-W.hat) */
-            tempvar resid0 clever0 ipw_wt
-            quietly gen double `resid0' = `depvar' - `yhat0' if `touse' & `treatvar' == 0
-            quietly gen double `clever0' = 1 / (1 - `whatvar') if `touse' & `treatvar' == 0
-            quietly gen double `ipw_wt' = `whatvar' / (1 - `whatvar') if `touse' & `treatvar' == 0
-
-            /* Weighted OLS (no intercept): epsilon = sum(w*X*Y) / sum(w*X^2) */
-            tempvar _wxy0 _wxx0
-            quietly gen double `_wxy0' = `ipw_wt' * `clever0' * `resid0' if `touse' & `treatvar' == 0
-            quietly gen double `_wxx0' = `ipw_wt' * `clever0'^2 if `touse' & `treatvar' == 0
-            quietly summarize `_wxy0' if `touse' & `treatvar' == 0
-            local _sum_wxy0 = r(sum)
-            quietly summarize `_wxx0' if `touse' & `treatvar' == 0
-            local epsilon0 = `_sum_wxy0' / r(sum)
-
-            /* Treated side: simple mean correction */
-            tempvar resid1 clever1
-            quietly gen double `resid1' = `depvar' - `yhat1' if `touse' & `treatvar' == 1
-            quietly gen double `clever1' = 1 / `whatvar' if `touse' & `treatvar' == 1
-
-            /* Manual OLS (no intercept) */
-            tempvar _xy1 _xx1
-            quietly gen double `_xy1' = `clever1' * `resid1' if `touse' & `treatvar' == 1
-            quietly gen double `_xx1' = `clever1'^2 if `touse' & `treatvar' == 1
-            quietly summarize `_xy1' if `touse' & `treatvar' == 1
-            local _sum_xy1 = r(sum)
-            quietly summarize `_xx1' if `touse' & `treatvar' == 1
-            local epsilon1 = `_sum_xy1' / r(sum)
-
-            /* Corrected potential outcomes */
-            tempvar yhat0_star yhat1_star
-            quietly gen double `yhat0_star' = `yhat0' + `epsilon0' / (1 - `whatvar') if `touse'
-            quietly gen double `yhat1_star' = `yhat1' + `epsilon1' / `whatvar' if `touse'
-
-            /* ATT = mean among treated of (yhat1* - yhat0*) + correction */
-            quietly count if `touse' & `treatvar' == 1
-            local n1 = r(N)
-
-            tempvar psi
-            quietly gen double `psi' = . if `touse'
-            quietly replace `psi' = (`yhat1_star' - `yhat0_star') ///
-                + `treatvar' / `whatvar' * (`depvar' - `yhat1_star') ///
-                - (1 - `treatvar') * `whatvar' / (1 - `whatvar') / `whatvar' * (`depvar' - `yhat0_star') if `touse'
-
-            /* Weight by treatment indicator for ATT */
-            tempvar tsweight wt_psi
-            quietly gen double `tsweight' = `treatvar' if `touse'
-            quietly gen double `wt_psi' = `tsweight' * `psi' if `touse'
-            quietly summarize `wt_psi' if `touse'
-            local sum_wt = `n1'
-            local ate = r(sum) / `sum_wt'
-
-            if "`cluster_var'" != "" {
-                confirm numeric variable `cluster_var'
-                tempvar wt_dev cl_sum cl_tag_t cl_sum_sq
-                quietly gen double `wt_dev' = `tsweight' * (`psi' - `ate') if `touse'
-                quietly bysort `cluster_var': egen double `cl_sum' = total(`wt_dev') if `touse'
-                quietly bysort `cluster_var': gen byte `cl_tag_t' = (_n == 1) if `touse'
-                quietly gen double `cl_sum_sq' = `cl_sum'^2 if `cl_tag_t' & `touse'
-                quietly summarize `cl_sum_sq' if `cl_tag_t' & `touse'
-                local se = sqrt(r(sum)) / `sum_wt'
-            }
-            else {
-                tempvar wt_dev_sq
-                quietly gen double `wt_dev_sq' = `tsweight'^2 * (`psi' - `ate')^2 if `touse'
-                quietly summarize `wt_dev_sq' if `touse'
-                local se = sqrt(r(sum)) / `sum_wt'
-            }
+        else {
+            quietly summarize `psi' if `touse'
+            local se = r(sd) / sqrt(`n_use')
         }
-        else if "`targetsample'" == "control" {
-            /* TMLE for ATC: fit treated regression with weights (1-W.hat)/W.hat */
-            tempvar resid1 clever1 ipw_wt
-            quietly gen double `resid1' = `depvar' - `yhat1' if `touse' & `treatvar' == 1
-            quietly gen double `clever1' = 1 / `whatvar' if `touse' & `treatvar' == 1
-            quietly gen double `ipw_wt' = (1 - `whatvar') / `whatvar' if `touse' & `treatvar' == 1
+    }
+    else if "`targetsample'" == "treated" {
+        /* ---- TMLE for ATT ----
+         * Control-side OLS (unweighted, no intercept):
+         *   clever0 = e/(1-e), resid0 = Y - Y.hat.0, among W=0
+         *   epsilon0 = sum(clever0 * resid0) / sum(clever0^2)
+         * Point estimate: tau_att_raw - epsilon0 * new_center
+         * SE: HC1 sandwich from control OLS + treated variance
+         */
+        quietly count if `touse' & `treatvar' == 1
+        local n1 = r(N)
+        quietly count if `touse' & `treatvar' == 0
+        local n0 = r(N)
 
-            /* Weighted OLS (no intercept): epsilon = sum(w*X*Y) / sum(w*X^2) */
-            tempvar _wxy1 _wxx1
-            quietly gen double `_wxy1' = `ipw_wt' * `clever1' * `resid1' if `touse' & `treatvar' == 1
-            quietly gen double `_wxx1' = `ipw_wt' * `clever1'^2 if `touse' & `treatvar' == 1
-            quietly summarize `_wxy1' if `touse' & `treatvar' == 1
-            local _sum_wxy1 = r(sum)
-            quietly summarize `_wxx1' if `touse' & `treatvar' == 1
-            local epsilon1 = `_sum_wxy1' / r(sum)
+        /* Control-side regression */
+        tempvar resid0 clever0
+        quietly gen double `resid0' = `depvar' - `yhat0' if `touse' & `treatvar' == 0
+        quietly gen double `clever0' = `whatvar' / (1 - `whatvar') if `touse' & `treatvar' == 0
 
-            /* Control side: simple OLS */
-            tempvar resid0 clever0
-            quietly gen double `resid0' = `depvar' - `yhat0' if `touse' & `treatvar' == 0
-            quietly gen double `clever0' = 1 / (1 - `whatvar') if `touse' & `treatvar' == 0
+        /* Unweighted OLS (no intercept): epsilon0 = sum(clever0*resid0)/sum(clever0^2) */
+        tempvar _xy0 _xx0
+        quietly gen double `_xy0' = `clever0' * `resid0' if `touse' & `treatvar' == 0
+        quietly gen double `_xx0' = `clever0'^2 if `touse' & `treatvar' == 0
+        quietly summarize `_xy0' if `touse' & `treatvar' == 0
+        local _sum_xy0 = r(sum)
+        quietly summarize `_xx0' if `touse' & `treatvar' == 0
+        local _sum_xx0 = r(sum)
+        local epsilon0 = `_sum_xy0' / `_sum_xx0'
 
-            /* Manual OLS (no intercept) */
-            tempvar _xy0 _xx0
-            quietly gen double `_xy0' = `clever0' * `resid0' if `touse' & `treatvar' == 0
-            quietly gen double `_xx0' = `clever0'^2 if `touse' & `treatvar' == 0
-            quietly summarize `_xy0' if `touse' & `treatvar' == 0
-            local _sum_xy0 = r(sum)
-            quietly summarize `_xx0' if `touse' & `treatvar' == 0
-            local epsilon0 = `_sum_xy0' / r(sum)
+        /* Point estimate */
+        quietly summarize `tauvar' if `touse' & `treatvar' == 1
+        local tau_att_raw = r(mean)
 
-            /* Corrected potential outcomes */
-            tempvar yhat0_star yhat1_star
-            quietly gen double `yhat0_star' = `yhat0' + `epsilon0' / (1 - `whatvar') if `touse'
-            quietly gen double `yhat1_star' = `yhat1' + `epsilon1' / `whatvar' if `touse'
+        tempvar att_clever_t
+        quietly gen double `att_clever_t' = `whatvar' / (1 - `whatvar') if `touse' & `treatvar' == 1
+        quietly summarize `att_clever_t' if `touse' & `treatvar' == 1
+        local new_center = r(mean)
 
-            /* ATC = mean among controls of (yhat1* - yhat0*) + correction */
-            quietly count if `touse' & `treatvar' == 0
-            local n0 = r(N)
+        local ate = `tau_att_raw' - `epsilon0' * `new_center'
 
-            tempvar psi
-            quietly gen double `psi' = . if `touse'
-            quietly replace `psi' = (`yhat1_star' - `yhat0_star') ///
-                + `treatvar' * (1 - `whatvar') / `whatvar' / (1 - `whatvar') * (`depvar' - `yhat1_star') ///
-                - (1 - `treatvar') / (1 - `whatvar') * (`depvar' - `yhat0_star') if `touse'
+        /* SE: HC1 sandwich */
+        tempvar ols_resid
+        quietly gen double `ols_resid' = `resid0' - `epsilon0' * `clever0' if `touse' & `treatvar' == 0
 
-            /* Weight by control indicator for ATC */
-            tempvar tsweight wt_psi
-            quietly gen double `tsweight' = (1 - `treatvar') if `touse'
-            quietly gen double `wt_psi' = `tsweight' * `psi' if `touse'
-            quietly summarize `wt_psi' if `touse'
-            local sum_wt = `n0'
-            local ate = r(sum) / `sum_wt'
+        if "`cluster_var'" != "" {
+            confirm numeric variable `cluster_var'
+            /* Clustered V_eps */
+            tempvar score0 cl_score0 cl_tag0 cl_score0_sq
+            quietly gen double `score0' = `ols_resid' * `clever0' if `touse' & `treatvar' == 0
+            quietly bysort `cluster_var': egen double `cl_score0' = total(`score0') if `touse' & `treatvar' == 0
+            quietly bysort `cluster_var': gen byte `cl_tag0' = (_n == 1) if `touse' & `treatvar' == 0
+            quietly gen double `cl_score0_sq' = `cl_score0'^2 if `cl_tag0' & `touse' & `treatvar' == 0
+            quietly summarize `cl_score0_sq' if `cl_tag0' & `touse' & `treatvar' == 0
+            local _sum_cl_score0_sq = r(sum)
+            quietly count if `cl_tag0' & `touse' & `treatvar' == 0
+            local G0 = r(N)
+            local V_eps = (`G0' / (`G0' - 1)) * `_sum_cl_score0_sq' / (`_sum_xx0'^2)
 
-            if "`cluster_var'" != "" {
-                confirm numeric variable `cluster_var'
-                tempvar wt_dev cl_sum cl_tag_t cl_sum_sq
-                quietly gen double `wt_dev' = `tsweight' * (`psi' - `ate') if `touse'
-                quietly bysort `cluster_var': egen double `cl_sum' = total(`wt_dev') if `touse'
-                quietly bysort `cluster_var': gen byte `cl_tag_t' = (_n == 1) if `touse'
-                quietly gen double `cl_sum_sq' = `cl_sum'^2 if `cl_tag_t' & `touse'
-                quietly summarize `cl_sum_sq' if `cl_tag_t' & `touse'
-                local se = sqrt(r(sum)) / `sum_wt'
-            }
-            else {
-                tempvar wt_dev_sq
-                quietly gen double `wt_dev_sq' = `tsweight'^2 * (`psi' - `ate')^2 if `touse'
-                quietly summarize `wt_dev_sq' if `touse'
-                local se = sqrt(r(sum)) / `sum_wt'
-            }
+            /* Clustered V_treat */
+            tempvar tresid cl_tresid cl_tag1 cl_tresid_sq
+            quietly gen double `tresid' = `depvar' - `yhat1' if `touse' & `treatvar' == 1
+            quietly bysort `cluster_var': egen double `cl_tresid' = total(`tresid') if `touse' & `treatvar' == 1
+            quietly bysort `cluster_var': gen byte `cl_tag1' = (_n == 1) if `touse' & `treatvar' == 1
+            quietly summarize `tresid' if `touse' & `treatvar' == 1
+            local tresid_mean = r(mean)
+            tempvar cl_tresid_dev
+            quietly gen double `cl_tresid_dev' = `cl_tresid' - `tresid_mean' if `cl_tag1' & `touse' & `treatvar' == 1
+            quietly gen double `cl_tresid_sq' = `cl_tresid_dev'^2 if `cl_tag1' & `touse' & `treatvar' == 1
+            quietly summarize `cl_tresid_sq' if `cl_tag1' & `touse' & `treatvar' == 1
+            quietly count if `cl_tag1' & `touse' & `treatvar' == 1
+            local G1 = r(N)
+            local V_treat = r(sum) / (`G1' * (`G1' - 1))
+
+            local sigma2 = `V_eps' * `new_center'^2 + `V_treat'
+            local se = sqrt(`sigma2')
+        }
+        else {
+            /* iid SE */
+            tempvar r_sq_x_sq
+            quietly gen double `r_sq_x_sq' = `ols_resid'^2 * `clever0'^2 if `touse' & `treatvar' == 0
+            quietly summarize `r_sq_x_sq' if `touse' & `treatvar' == 0
+            local V_eps = (`n0' / (`n0' - 1)) * r(sum) / (`_sum_xx0'^2)
+
+            tempvar tresid
+            quietly gen double `tresid' = `depvar' - `yhat1' if `touse' & `treatvar' == 1
+            quietly summarize `tresid' if `touse' & `treatvar' == 1
+            local V_treat = r(Var) / `n1'
+
+            local sigma2 = `V_eps' * `new_center'^2 + `V_treat'
+            local se = sqrt(`sigma2')
+        }
+    }
+    else if "`targetsample'" == "control" {
+        /* ---- TMLE for ATC ----
+         * Treated-side OLS (unweighted, no intercept):
+         *   clever1 = (1-e)/e, resid1 = Y - Y.hat.1, among W=1
+         *   epsilon1 = sum(clever1 * resid1) / sum(clever1^2)
+         * Point estimate: tau_atc_raw + epsilon1 * new_center
+         * SE: HC1 sandwich from treated OLS + control variance
+         */
+        quietly count if `touse' & `treatvar' == 1
+        local n1 = r(N)
+        quietly count if `touse' & `treatvar' == 0
+        local n0 = r(N)
+
+        /* Treated-side regression */
+        tempvar resid1 clever1
+        quietly gen double `resid1' = `depvar' - `yhat1' if `touse' & `treatvar' == 1
+        quietly gen double `clever1' = (1 - `whatvar') / `whatvar' if `touse' & `treatvar' == 1
+
+        /* Unweighted OLS (no intercept): epsilon1 = sum(clever1*resid1)/sum(clever1^2) */
+        tempvar _xy1 _xx1
+        quietly gen double `_xy1' = `clever1' * `resid1' if `touse' & `treatvar' == 1
+        quietly gen double `_xx1' = `clever1'^2 if `touse' & `treatvar' == 1
+        quietly summarize `_xy1' if `touse' & `treatvar' == 1
+        local _sum_xy1 = r(sum)
+        quietly summarize `_xx1' if `touse' & `treatvar' == 1
+        local _sum_xx1 = r(sum)
+        local epsilon1 = `_sum_xy1' / `_sum_xx1'
+
+        /* Point estimate */
+        quietly summarize `tauvar' if `touse' & `treatvar' == 0
+        local tau_atc_raw = r(mean)
+
+        tempvar atc_clever_c
+        quietly gen double `atc_clever_c' = (1 - `whatvar') / `whatvar' if `touse' & `treatvar' == 0
+        quietly summarize `atc_clever_c' if `touse' & `treatvar' == 0
+        local new_center = r(mean)
+
+        local ate = `tau_atc_raw' + `epsilon1' * `new_center'
+
+        /* SE: HC1 sandwich */
+        tempvar ols_resid
+        quietly gen double `ols_resid' = `resid1' - `epsilon1' * `clever1' if `touse' & `treatvar' == 1
+
+        if "`cluster_var'" != "" {
+            confirm numeric variable `cluster_var'
+            /* Clustered V_eps */
+            tempvar score1 cl_score1 cl_tag1 cl_score1_sq
+            quietly gen double `score1' = `ols_resid' * `clever1' if `touse' & `treatvar' == 1
+            quietly bysort `cluster_var': egen double `cl_score1' = total(`score1') if `touse' & `treatvar' == 1
+            quietly bysort `cluster_var': gen byte `cl_tag1' = (_n == 1) if `touse' & `treatvar' == 1
+            quietly gen double `cl_score1_sq' = `cl_score1'^2 if `cl_tag1' & `touse' & `treatvar' == 1
+            quietly summarize `cl_score1_sq' if `cl_tag1' & `touse' & `treatvar' == 1
+            local _sum_cl_score1_sq = r(sum)
+            quietly count if `cl_tag1' & `touse' & `treatvar' == 1
+            local G1 = r(N)
+            local V_eps = (`G1' / (`G1' - 1)) * `_sum_cl_score1_sq' / (`_sum_xx1'^2)
+
+            /* Clustered V_ctrl */
+            tempvar cresid cl_cresid cl_tag0 cl_cresid_sq
+            quietly gen double `cresid' = `depvar' - `yhat0' if `touse' & `treatvar' == 0
+            quietly bysort `cluster_var': egen double `cl_cresid' = total(`cresid') if `touse' & `treatvar' == 0
+            quietly bysort `cluster_var': gen byte `cl_tag0' = (_n == 1) if `touse' & `treatvar' == 0
+            quietly summarize `cresid' if `touse' & `treatvar' == 0
+            local cresid_mean = r(mean)
+            tempvar cl_cresid_dev
+            quietly gen double `cl_cresid_dev' = `cl_cresid' - `cresid_mean' if `cl_tag0' & `touse' & `treatvar' == 0
+            quietly gen double `cl_cresid_sq' = `cl_cresid_dev'^2 if `cl_tag0' & `touse' & `treatvar' == 0
+            quietly summarize `cl_cresid_sq' if `cl_tag0' & `touse' & `treatvar' == 0
+            quietly count if `cl_tag0' & `touse' & `treatvar' == 0
+            local G0 = r(N)
+            local V_ctrl = r(sum) / (`G0' * (`G0' - 1))
+
+            local sigma2 = `V_eps' * `new_center'^2 + `V_ctrl'
+            local se = sqrt(`sigma2')
+        }
+        else {
+            /* iid SE */
+            tempvar r_sq_x_sq
+            quietly gen double `r_sq_x_sq' = `ols_resid'^2 * `clever1'^2 if `touse' & `treatvar' == 1
+            quietly summarize `r_sq_x_sq' if `touse' & `treatvar' == 1
+            local V_eps = (`n1' / (`n1' - 1)) * r(sum) / (`_sum_xx1'^2)
+
+            tempvar cresid
+            quietly gen double `cresid' = `depvar' - `yhat0' if `touse' & `treatvar' == 0
+            quietly summarize `cresid' if `touse' & `treatvar' == 0
+            local V_ctrl = r(Var) / `n0'
+
+            local sigma2 = `V_eps' * `new_center'^2 + `V_ctrl'
+            local se = sqrt(`sigma2')
         }
     }
 

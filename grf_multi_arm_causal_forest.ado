@@ -93,24 +93,6 @@ program define grf_multi_arm_causal_forest, eclass
         local weight_var `weights'
     }
 
-    /* ---- Parse equalize cluster weights ---- */
-    if "`equalizeclusterweights'" != "" {
-        if "`cluster'" == "" {
-            display as error "equalizeclusterweights requires cluster() option"
-            exit 198
-        }
-        /* Compute 1/cluster_size for each observation */
-        tempvar _eq_clsize _eq_wt
-        quietly bysort `cluster': gen long `_eq_clsize' = _N if `touse'
-        quietly gen double `_eq_wt' = 1.0 / `_eq_clsize' if `touse'
-        /* Combine with existing weights if any */
-        if "`weight_var'" != "" {
-            quietly replace `_eq_wt' = `_eq_wt' * `weight_var' if `touse'
-        }
-        /* Use equalized weights as the weight variable */
-        local weight_var `_eq_wt'
-    }
-
     /* ---- Parse varlist: depvar treat1 treat2 ... indepvar1 indepvar2 ... ---- */
     gettoken depvar rest : varlist
     local treatvars ""
@@ -159,6 +141,24 @@ program define grf_multi_arm_causal_forest, eclass
     if `n_use' < 2 {
         display as error "need at least 2 non-missing observations"
         exit 2000
+    }
+
+    /* ---- Parse equalize cluster weights ---- */
+    if "`equalizeclusterweights'" != "" {
+        if "`cluster'" == "" {
+            display as error "equalizeclusterweights requires cluster() option"
+            exit 198
+        }
+        /* Compute 1/cluster_size for each observation */
+        tempvar _eq_clsize _eq_wt
+        quietly bysort `cluster': gen long `_eq_clsize' = _N if `touse'
+        quietly gen double `_eq_wt' = 1.0 / `_eq_clsize' if `touse'
+        /* Combine with existing weights if any */
+        if "`weight_var'" != "" {
+            quietly replace `_eq_wt' = `_eq_wt' * `weight_var' if `touse'
+        }
+        /* Use equalized weights as the weight variable */
+        local weight_var `_eq_wt'
     }
 
     /* ---- Validate treatment variables ---- */
