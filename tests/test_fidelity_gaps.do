@@ -202,9 +202,9 @@ capture noisily {
 
     * Specify only x1 and x2 for LL splitting
     grf_ll_regression_forest y x1 x2 x3, gen(llsv1) ntrees(100) seed(42) ///
-        llsplitvars(x1 x2)
+        llvars(x1 x2)
     assert !missing(llsv1) in 1
-    * llsplitvars implies llsplit
+    * llvars implies llenable
     assert e(enable_ll_split) == 1
     drop llsv1
 }
@@ -216,33 +216,33 @@ else {
     display as result "PASS: E2.5 ll.split.variables varlist"
 }
 
-* ---- E2.6: llsplitvars with invalid variable errors ----
+* ---- E2.6: llvars with invalid variable errors ----
 capture {
     grf_ll_regression_forest y x1 x2 x3, gen(llsv_err) ntrees(100) seed(42) ///
-        llsplitvars(x1 nonexistent)
+        llvars(x1 nonexistent)
 }
 if _rc {
-    display as result "PASS: E2.6 llsplitvars error on invalid variable"
+    display as result "PASS: E2.6 llvars error on invalid variable"
 }
 else {
-    display as error "FAIL: E2.6 should error on invalid variable in llsplitvars"
+    display as error "FAIL: E2.6 should error on invalid variable in llvars"
     local errors = `errors' + 1
 }
 
-* ---- E2.7: llsplitvars with explicit llsplit ----
+* ---- E2.7: llvars with explicit llenable ----
 capture noisily {
     grf_ll_regression_forest y x1 x2 x3, gen(llsv3) ntrees(100) seed(42) ///
-        llsplit llsplitvars(x1)
+        llenable llvars(x1)
     assert !missing(llsv3) in 1
     assert e(enable_ll_split) == 1
     drop llsv3
 }
 if _rc {
-    display as error "FAIL: E2.7 llsplitvars with explicit llsplit"
+    display as error "FAIL: E2.7 llvars with explicit llenable"
     local errors = `errors' + 1
 }
 else {
-    display as result "PASS: E2.7 llsplitvars with explicit llsplit"
+    display as result "PASS: E2.7 llvars with explicit llenable"
 }
 
 
@@ -501,7 +501,7 @@ capture noisily {
     gen y = 2*x1 + w + rnormal()
 
     grf_causal_forest y w x1 x2, gen(cate_eq) ntrees(100) seed(42) ///
-        cluster(cluster_id) equalizeclusterweights
+        nuisancetrees(100) cluster(cluster_id) equalizeclusterweights
     assert !missing(cate_eq) in 1
     assert "`e(cluster_var)'" == "cluster_id"
     drop cate_eq _grf_yhat _grf_what
@@ -905,27 +905,19 @@ else {
     local errors = `errors' + 1
 }
 
-* ---- E5.7b: TMLE + debiasingweights errors out ----
-capture {
-    clear
-    set obs 200
-    set seed 42
-    gen x1 = rnormal()
-    gen x2 = rnormal()
-    gen w = rbinomial(1, 0.5)
-    gen y = x1 + w + rnormal()
-    gen dbwt = abs(x1) + 0.5
-
-    grf_causal_forest y w x1 x2, gen(tau_db_err) ntrees(50) seed(42)
-    grf_ate, method(TMLE) debiasingweights(dbwt)
+* ---- E5.7b: TMLE rejects debiasing weights ----
+capture noisily {
+    gen double _dbw_e5 = abs(x1) + 0.5
+    grf_ate, method(TMLE) debiasingweights(_dbw_e5)
 }
-if _rc {
-    display as result "PASS: E5.7b TMLE + debiasingweights errors"
+if _rc == 198 {
+    display as result "PASS: E5.7b TMLE rejects debiasing weights"
 }
 else {
-    display as error "FAIL: E5.7b should error with method(TMLE) debiasingweights()"
+    display as error "FAIL: E5.7b TMLE rejects debiasing weights (rc=" _rc ")"
     local errors = `errors' + 1
 }
+capture drop _dbw_e5
 
 * ---- E5.8: regression.splitting quantile forest ----
 capture noisily {

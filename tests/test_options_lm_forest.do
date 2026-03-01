@@ -112,19 +112,19 @@ else {
     display as result "PASS: nohonestyprune"
 }
 
-* ---- Test 7: nostabilizesplits ----
+* ---- Test 7: stabilizesplits (opt-in, default OFF) ----
 capture noisily {
-    grf_lm_forest y w1 w2, xvars(x1 x2 x3 x4 x5) gen(lm7) ntrees(100) seed(42) nostabilizesplits
+    grf_lm_forest y w1 w2, xvars(x1 x2 x3 x4 x5) gen(lm7) ntrees(100) seed(42) stabilizesplits
     assert !missing(lm7_1) in 1
-    assert e(stabilize) == 0
+    assert e(stabilize) == 1
     drop lm7_1 lm7_2 _grf_lm_yhat _grf_lm_what1 _grf_lm_what2
 }
 if _rc {
-    display as error "FAIL: nostabilizesplits"
+    display as error "FAIL: stabilizesplits"
     local errors = `errors' + 1
 }
 else {
-    display as result "PASS: nostabilizesplits"
+    display as result "PASS: stabilizesplits"
 }
 
 * ---- Test 8: alpha(0.1) ----
@@ -270,7 +270,7 @@ capture noisily {
     grf_lm_forest y w1 w2, xvars(x1 x2 x3 x4 x5) gen(lm17) ntrees(100) seed(123) ///
         mtry(3) minnodesize(10) samplefrac(0.4) honestyfrac(0.7)                    ///
         nohonestyprune alpha(0.1) imbalancepenalty(0.5) cigroupsize(2)               ///
-        numthreads(2) nostabilizesplits estimatevariance nuisancetrees(100)
+        numthreads(2) stabilizesplits estimatevariance nuisancetrees(100)
     assert !missing(lm17_1) in 1
     assert !missing(lm17_2) in 1
     assert !missing(lm17_1_var) in 1
@@ -283,7 +283,7 @@ capture noisily {
     assert reldif(e(alpha), 0.1) < 1e-6
     assert reldif(e(imbalance_penalty), 0.5) < 1e-6
     assert e(ci_group_size) == 2
-    assert e(stabilize) == 0
+    assert e(stabilize) == 1
     assert e(n_regressors) == 2
     drop lm17_1 lm17_2 lm17_1_var lm17_2_var _grf_lm_yhat _grf_lm_what1 _grf_lm_what2
 }
@@ -300,7 +300,7 @@ capture noisily {
     grf_lm_forest y w1 w2, xvars(x1 x2 x3 x4 x5) gen(lm18) ntrees(100) seed(42)
     assert e(honesty) == 1
     assert e(honesty_prune) == 1
-    assert e(stabilize) == 1
+    assert e(stabilize) == 0
     assert e(mtry) == 0
     assert e(min_node) == 5
     assert reldif(e(sample_fraction), 0.5) < 1e-6

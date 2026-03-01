@@ -27,6 +27,9 @@ program define grf_regression_forest, eclass
             CLuster(varname numeric)           ///
             WEIghts(varname numeric)           ///
             EQUALizeclusterweights             ///
+            TUNEParameters(string)             ///
+            TUNENumtrees(integer 200)          ///
+            TUNENumreps(integer 50)            ///
         ]
 
     /* ---- Parse honesty ---- */
@@ -140,6 +143,48 @@ program define grf_regression_forest, eclass
         confirm new variable `vargenerate'
         quietly gen double `vargenerate' = .
         local n_output 2
+    }
+
+        /* ---- Inline tuning ---- */
+    if `"`tuneparameters'"' != "" {
+        display as text ""
+        display as text "Running inline parameter tuning..."
+        display as text "  Parameters: `tuneparameters'"
+        display as text "  Tune trees: `tunenumtrees'  Tune reps: `tunenumreps'"
+
+        /* Call grf_tune to find best parameters */
+        grf_tune `varlist' if `touse', foresttype(regression) ///
+            numreps(`tunenumreps') tunetrees(`tunenumtrees') seed(`seed') ///
+            numthreads(`numthreads')
+
+        /* Override specified parameters with tuned values */
+        foreach _tp of local tuneparameters {
+            if "`_tp'" == "mtry" {
+                local mtry = r(best_mtry)
+                display as text "  Tuned mtry: `mtry'"
+            }
+            else if "`_tp'" == "minnodesize" {
+                local minnodesize = r(best_min_node_size)
+                display as text "  Tuned min_node_size: `minnodesize'"
+            }
+            else if "`_tp'" == "samplefrac" {
+                local samplefrac = r(best_sample_fraction)
+                display as text "  Tuned sample_fraction: `samplefrac'"
+            }
+            else if "`_tp'" == "honestyfrac" {
+                local honestyfrac = r(best_honesty_fraction)
+                display as text "  Tuned honesty_fraction: `honestyfrac'"
+            }
+            else if "`_tp'" == "alpha" {
+                local alpha = r(best_alpha)
+                display as text "  Tuned alpha: `alpha'"
+            }
+            else if "`_tp'" == "imbalancepenalty" {
+                local imbalancepenalty = r(best_imbalance_penalty)
+                display as text "  Tuned imbalance_penalty: `imbalancepenalty'"
+            }
+        }
+        display as text ""
     }
 
     /* ---- Display header ---- */

@@ -72,6 +72,8 @@ public:
 
   void set_censor_index(size_t index);
 
+  void add_disallowed_split_variable(size_t index);
+
   /**
    * Sorts and gets the unique values in `samples` at variable `var`.
    *

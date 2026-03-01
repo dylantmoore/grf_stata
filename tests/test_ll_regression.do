@@ -44,7 +44,7 @@ display as text ""
 display as text "--- Test 2: With LL splits enabled ---"
 
 grf_ll_regression_forest y x1 x2, gen(pred_lls) ntrees(500) seed(42) ///
-    llsplit lllambda(0.5) replace
+    llenable lllambda(0.5) replace
 
 quietly count if !missing(pred_lls)
 local n_pred = r(N)

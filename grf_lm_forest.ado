@@ -37,6 +37,9 @@ program define grf_lm_forest, eclass
             CLuster(varname numeric)           ///
             WEIghts(varname numeric)           ///
             EQUALizeclusterweights             ///
+            TUNEParameters(string)             ///
+            TUNENumtrees(integer 200)          ///
+            TUNENumreps(integer 50)            ///
         ]
 
     /* ---- Parse honesty ---- */
@@ -186,6 +189,48 @@ program define grf_lm_forest, eclass
         }
     }
 
+        /* ---- Inline tuning ---- */
+    if `"`tuneparameters'"' != "" {
+        display as text ""
+        display as text "Running inline parameter tuning..."
+        display as text "  Parameters: `tuneparameters'"
+        display as text "  Tune trees: `tunenumtrees'  Tune reps: `tunenumreps'"
+
+        /* Call grf_tune to find best parameters */
+        grf_tune `varlist' if `touse', foresttype(lm_forest) ///
+            numreps(`tunenumreps') tunetrees(`tunenumtrees') seed(`seed') ///
+            numthreads(`numthreads') xvars(`xvars')
+
+        /* Override specified parameters with tuned values */
+        foreach _tp of local tuneparameters {
+            if "`_tp'" == "mtry" {
+                local mtry = r(best_mtry)
+                display as text "  Tuned mtry: `mtry'"
+            }
+            else if "`_tp'" == "minnodesize" {
+                local minnodesize = r(best_min_node_size)
+                display as text "  Tuned min_node_size: `minnodesize'"
+            }
+            else if "`_tp'" == "samplefrac" {
+                local samplefrac = r(best_sample_fraction)
+                display as text "  Tuned sample_fraction: `samplefrac'"
+            }
+            else if "`_tp'" == "honestyfrac" {
+                local honestyfrac = r(best_honesty_fraction)
+                display as text "  Tuned honesty_fraction: `honestyfrac'"
+            }
+            else if "`_tp'" == "alpha" {
+                local alpha = r(best_alpha)
+                display as text "  Tuned alpha: `alpha'"
+            }
+            else if "`_tp'" == "imbalancepenalty" {
+                local imbalancepenalty = r(best_imbalance_penalty)
+                display as text "  Tuned imbalance_penalty: `imbalancepenalty'"
+            }
+        }
+        display as text ""
+    }
+
     /* ---- Display header ---- */
     display as text ""
     display as text "Generalized Random Forest: Linear Model Forest"
@@ -260,7 +305,8 @@ program define grf_lm_forest, eclass
         forvalues j = 1/`n_regressors' {
             local wv : word `j' of `regvars'
             local wiv : word `j' of `whatinput'
-            tempvar what_`j' wc_`j'
+            tempvar what_`j'
+            tempvar wc_`j'
             quietly gen double `what_`j'' = `wiv' if `touse'
             quietly gen double `wc_`j'' = `wv' - `what_`j'' if `touse'
             local w_centered_vars `w_centered_vars' `wc_`j''
@@ -362,7 +408,9 @@ program define grf_lm_forest, eclass
 
     /* ---- Save user-specified generate variables ---- */
     if "`yhatgenerate'" != "" {
-        if "`replace'" != "" { capture drop `yhatgenerate' }
+        if "`replace'" != "" {
+            capture drop `yhatgenerate'
+        }
         confirm new variable `yhatgenerate'
         quietly gen double `yhatgenerate' = `yhat'
         label variable `yhatgenerate' "Y.hat from nuisance regression (Y ~ X)"
@@ -375,7 +423,9 @@ program define grf_lm_forest, eclass
         }
         forvalues j = 1/`n_regressors' {
             local wgn : word `j' of `whatgenerate'
-            if "`replace'" != "" { capture drop `wgn' }
+            if "`replace'" != "" {
+                capture drop `wgn'
+            }
             confirm new variable `wgn'
             quietly gen double `wgn' = `what_`j''
             local wv : word `j' of `regvars'

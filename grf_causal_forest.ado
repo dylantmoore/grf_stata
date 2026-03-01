@@ -33,6 +33,9 @@ program define grf_causal_forest, eclass
             CLuster(varname numeric)           ///
             WEIghts(varname numeric)           ///
             EQUALizeclusterweights             ///
+            TUNEParameters(string)             ///
+            TUNENumtrees(integer 200)          ///
+            TUNENumreps(integer 50)            ///
         ]
 
     /* ---- Parse honesty ---- */
@@ -155,6 +158,48 @@ program define grf_causal_forest, eclass
         exit 198
     }
 
+        /* ---- Inline tuning ---- */
+    if `"`tuneparameters'"' != "" {
+        display as text ""
+        display as text "Running inline parameter tuning..."
+        display as text "  Parameters: `tuneparameters'"
+        display as text "  Tune trees: `tunenumtrees'  Tune reps: `tunenumreps'"
+
+        /* Call grf_tune to find best parameters */
+        grf_tune `varlist' if `touse', foresttype(causal) ///
+            numreps(`tunenumreps') tunetrees(`tunenumtrees') seed(`seed') ///
+            numthreads(`numthreads')
+
+        /* Override specified parameters with tuned values */
+        foreach _tp of local tuneparameters {
+            if "`_tp'" == "mtry" {
+                local mtry = r(best_mtry)
+                display as text "  Tuned mtry: `mtry'"
+            }
+            else if "`_tp'" == "minnodesize" {
+                local minnodesize = r(best_min_node_size)
+                display as text "  Tuned min_node_size: `minnodesize'"
+            }
+            else if "`_tp'" == "samplefrac" {
+                local samplefrac = r(best_sample_fraction)
+                display as text "  Tuned sample_fraction: `samplefrac'"
+            }
+            else if "`_tp'" == "honestyfrac" {
+                local honestyfrac = r(best_honesty_fraction)
+                display as text "  Tuned honesty_fraction: `honestyfrac'"
+            }
+            else if "`_tp'" == "alpha" {
+                local alpha = r(best_alpha)
+                display as text "  Tuned alpha: `alpha'"
+            }
+            else if "`_tp'" == "imbalancepenalty" {
+                local imbalancepenalty = r(best_imbalance_penalty)
+                display as text "  Tuned imbalance_penalty: `imbalancepenalty'"
+            }
+        }
+        display as text ""
+    }
+
     /* ---- Display header ---- */
     display as text ""
     display as text "Generalized Random Forest: Causal Forest"
@@ -186,6 +231,16 @@ program define grf_causal_forest, eclass
      *   3. Center: Y.centered = Y - Y.hat, W.centered = W - W.hat
      *   4. Fit causal forest on (X, Y.centered, W.centered)
      */
+
+    /* Build extra vars for nuisance calls (cluster/weight columns) */
+    /* Must be built here, before the nuisance plugin calls below    */
+    local _nuis_extra_vars ""
+    if "`cluster_var'" != "" {
+        local _nuis_extra_vars `_nuis_extra_vars' `cluster_var'
+    }
+    if "`weight_var'" != "" {
+        local _nuis_extra_vars `_nuis_extra_vars' `weight_var'
+    }
 
     /* Nuisance column indices (regression: X + Y = nindep + 1 data cols) */
     local _nuis_data_cols = `nindep' + 1
@@ -220,7 +275,7 @@ program define grf_causal_forest, eclass
         display as text "Step 1/3: Fitting nuisance model Y ~ X ..."
         tempvar yhat
         quietly gen double `yhat' = .
-        plugin call grf_plugin `indepvars' `depvar' `extra_vars' `yhat' ///
+        plugin call grf_plugin `indepvars' `depvar' `_nuis_extra_vars' `yhat' ///
             if `touse',                                     ///
             "regression"                                    ///
             "`nuisancetrees'"                               ///
@@ -249,7 +304,7 @@ program define grf_causal_forest, eclass
         display as text "Step 2/3: Fitting nuisance model W ~ X ..."
         tempvar what
         quietly gen double `what' = .
-        plugin call grf_plugin `indepvars' `treatvar' `extra_vars' `what' ///
+        plugin call grf_plugin `indepvars' `treatvar' `_nuis_extra_vars' `what' ///
             if `touse',                                      ///
             "regression"                                     ///
             "`nuisancetrees'"                                ///

@@ -1,8 +1,13 @@
 *! grf_average_partial_effect.ado -- Average Partial Effect from causal forest
-*! Version 0.1.0
+*! Version 0.2.0
 *! Computes doubly-robust APE from grf_causal_forest ereturn results
 *! For continuous treatment, APE estimates the average marginal effect of W on Y
 *! Uses AIPW DR scores with optional debiasing weights
+*!
+*! Note: R's grf has deprecated average_partial_effect() in favor of
+*! average_treatment_effect() with continuous treatment. Stata retains
+*! grf_average_partial_effect as a standalone command for backward compatibility.
+*! For new work, users may use grf_ate with continuous treatment.
 
 program define grf_average_partial_effect, rclass
     version 14.0

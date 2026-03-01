@@ -123,7 +123,7 @@ benchmark, cmd("grf_ll_regression_forest y `xvars', gen(p_ll) ntrees(500) seed(4
     name("LL Regression Forest") n(2000)
 
 * 11. LL regression with LL splits
-benchmark, cmd("grf_ll_regression_forest y `xvars', gen(p_lls) ntrees(500) seed(42) llsplit replace") ///
+benchmark, cmd("grf_ll_regression_forest y `xvars', gen(p_lls) ntrees(500) seed(42) llenable replace") ///
     name("LL Regression (LL splits)") n(2000)
 
 * 12. Boosted regression forest

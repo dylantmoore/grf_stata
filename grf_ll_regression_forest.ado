@@ -4,9 +4,9 @@
 *!
 *! Like regression forest but with local linear correction at prediction time.
 *!
-*! Known limitation: R's ll.split.variables accepts a vector of variable
-*! indices to restrict which variables are used for splitting. Stata's
-*! llsplit option is a boolean toggle (splits on all variables when enabled).
+*! R's ll.split.variables accepts a vector of variable indices to restrict
+*! which variables are used for splitting. In Stata, use llvars(varlist) to
+*! specify split variables, or llenable to split on all variables.
 
 program define grf_ll_regression_forest, eclass
     version 14.0
@@ -29,8 +29,8 @@ program define grf_ll_regression_forest, eclass
             ESTIMATEVariance                   ///
             REPlace                            ///
             VARGenerate(name)                  ///
-            LLSplit                            ///
-            LLSplitVars(varlist numeric)       ///
+            LLENable                           ///
+            LLVars(string)                     ///
             LLLambda(real 0.1)                 ///
             LLWeightpenalty                    ///
             LLCutoff(integer 0)               ///
@@ -38,6 +38,9 @@ program define grf_ll_regression_forest, eclass
             CLuster(varname numeric)           ///
             WEIghts(varname numeric)           ///
             EQUALizeclusterweights             ///
+            TUNEParameters(string)             ///
+            TUNENumtrees(integer 200)          ///
+            TUNENumreps(integer 50)            ///
         ]
 
     /* ---- Parse honesty ---- */
@@ -63,7 +66,7 @@ program define grf_ll_regression_forest, eclass
 
     /* ---- Parse local linear options ---- */
     local enable_ll_split 0
-    if "`llsplit'" != "" {
+    if "`llenable'" != "" {
         local enable_ll_split 1
     }
 
@@ -115,8 +118,16 @@ program define grf_ll_regression_forest, eclass
      * Convert variable names to 0-indexed column positions in the X matrix.
      * If LLSplit is specified without LLSplitVars, all variables are used (default). */
     local ll_split_vars_str ""
-    if "`llsplitvars'" != "" {
-        foreach sv of local llsplitvars {
+    if `"`llvars'"' != "" {
+        /* Parse the string as a variable list */
+        local _llsv_list `llvars'
+        foreach sv of local _llsv_list {
+            /* Confirm the variable exists and is numeric */
+            capture confirm numeric variable `sv'
+            if _rc {
+                display as error "llvars: variable `sv' is not a numeric variable in the dataset"
+                exit 198
+            }
             local found 0
             local pos 0
             foreach xv of local indepvars {
@@ -127,13 +138,13 @@ program define grf_ll_regression_forest, eclass
                 local pos = `pos' + 1
             }
             if !`found' {
-                display as error "llsplitvars: variable `sv' not found in predictor list"
+                display as error "llvars: variable `sv' not found in predictor list"
                 exit 198
             }
         }
         local ll_split_vars_str = trim("`ll_split_vars_str'")
         /* Enable LL split if splitvars are specified */
-        if "`llsplit'" == "" {
+        if "`llenable'" == "" {
             local enable_ll_split 1
         }
     }
@@ -192,6 +203,48 @@ program define grf_ll_regression_forest, eclass
         confirm new variable `vargenerate'
         quietly gen double `vargenerate' = .
         local n_output 2
+    }
+
+        /* ---- Inline tuning ---- */
+    if `"`tuneparameters'"' != "" {
+        display as text ""
+        display as text "Running inline parameter tuning..."
+        display as text "  Parameters: `tuneparameters'"
+        display as text "  Tune trees: `tunenumtrees'  Tune reps: `tunenumreps'"
+
+        /* Call grf_tune to find best parameters */
+        grf_tune `varlist' if `touse', foresttype(ll_regression) ///
+            numreps(`tunenumreps') tunetrees(`tunenumtrees') seed(`seed') ///
+            numthreads(`numthreads')
+
+        /* Override specified parameters with tuned values */
+        foreach _tp of local tuneparameters {
+            if "`_tp'" == "mtry" {
+                local mtry = r(best_mtry)
+                display as text "  Tuned mtry: `mtry'"
+            }
+            else if "`_tp'" == "minnodesize" {
+                local minnodesize = r(best_min_node_size)
+                display as text "  Tuned min_node_size: `minnodesize'"
+            }
+            else if "`_tp'" == "samplefrac" {
+                local samplefrac = r(best_sample_fraction)
+                display as text "  Tuned sample_fraction: `samplefrac'"
+            }
+            else if "`_tp'" == "honestyfrac" {
+                local honestyfrac = r(best_honesty_fraction)
+                display as text "  Tuned honesty_fraction: `honestyfrac'"
+            }
+            else if "`_tp'" == "alpha" {
+                local alpha = r(best_alpha)
+                display as text "  Tuned alpha: `alpha'"
+            }
+            else if "`_tp'" == "imbalancepenalty" {
+                local imbalancepenalty = r(best_imbalance_penalty)
+                display as text "  Tuned imbalance_penalty: `imbalancepenalty'"
+            }
+        }
+        display as text ""
     }
 
     /* ---- Display header ---- */

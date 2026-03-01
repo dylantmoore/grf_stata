@@ -108,6 +108,9 @@ All forest commands share these options:
 | `numthreads(#)` | 0 (all) | Number of threads |
 | `estimatevariance` | off | Compute variance estimates |
 | `replace` | off | Overwrite existing variables |
+| `cluster(varname)` | none | Cluster variable for cluster-robust forests |
+| `weights(varname)` | none | Sample weights variable |
+| `nomia` | MIA on | Disable Missing Indicator Action (casewise deletion) |
 
 ## Stored Results
 
@@ -121,6 +124,13 @@ All forest commands store results in `e()`:
 - `e(depvar)`, `e(treatvar)`, `e(indepvars)` — variable names
 
 See `help` for each command for complete stored results.
+
+## Known Limitations vs R's grf
+
+- **User-supplied nuisance estimates**: R supports pre-computed `W.hat`, `Y.hat`, `Z.hat`. Stata always estimates nuisance parameters internally via regression forests.
+- **Local linear split variable selection**: R's `ll.split.variables` accepts a vector of variable indices. Stata's `llsplit` is a boolean toggle.
+- **APE deprecation**: R has deprecated `average_partial_effect()`. Stata retains `grf_average_partial_effect` for backward compatibility.
+- **Causal survival DR scores**: `grf_get_scores` after `grf_causal_survival_forest` returns plug-in CATE scores, not full AIPW doubly-robust scores.
 
 ## Requirements
 

@@ -12,7 +12,7 @@ program define grf_best_linear_projection, eclass
     version 14.0
 
     syntax [varlist(numeric default=none)] [if] [in] ///
-        [, VCOVtype(string) TARGETsample(string)]
+        [, VCOVtype(string) TARGETsample(string) DEBIASINGweights(varname numeric)]
 
     /* ---- Verify causal forest results exist ---- */
     if "`e(cmd)'" != "grf_causal_forest" {
@@ -26,6 +26,7 @@ program define grf_best_linear_projection, eclass
     local yhatvar   "`e(yhat_var)'"
     local whatvar   "`e(what_var)'"
     local indepvars_default "`e(indepvars)'"
+    local cluster_var "`e(cluster_var)'"
 
     /* ---- Default and validate vcov.type ---- */
     if "`vcovtype'" == "" {
@@ -42,8 +43,9 @@ program define grf_best_linear_projection, eclass
     if "`targetsample'" == "" {
         local targetsample "all"
     }
-    if "`targetsample'" != "all" & "`targetsample'" != "overlap" {
-        display as error "target.sample must be one of: all, overlap"
+    if "`targetsample'" != "all" & "`targetsample'" != "overlap" ///
+        & "`targetsample'" != "treated" & "`targetsample'" != "control" {
+        display as error "target.sample must be one of: all, treated, control, overlap"
         exit 198
     }
 
@@ -102,6 +104,17 @@ program define grf_best_linear_projection, eclass
         gen double `dr_score' = `tauvar' + (`w_resid' / `w_resid_var') * `y_resid' if `touse'
     }
 
+    /* ---- Apply debiasing weights if specified ---- */
+    if "`debiasingweights'" != "" {
+        confirm numeric variable `debiasingweights'
+        markout `touse' `debiasingweights'
+        quietly count if `touse'
+        local n_use = r(N)
+        tempvar dw_dr
+        quietly gen double `dw_dr' = `dr_score' * `debiasingweights' if `touse'
+        quietly replace `dr_score' = `dw_dr' if `touse'
+    }
+
     /* ---- Compute observation weights for target.sample ---- */
     tempvar obsweight
     if "`targetsample'" == "overlap" {
@@ -112,6 +125,28 @@ program define grf_best_linear_projection, eclass
         local n_use = r(N)
         if `n_use' < 2 {
             display as error "too few observations with positive overlap weights"
+            exit 2000
+        }
+    }
+    else if "`targetsample'" == "treated" {
+        /* Weight by propensity score W.hat */
+        quietly gen double `obsweight' = `whatvar' if `touse'
+        quietly replace `touse' = 0 if `obsweight' < 1e-12 & `touse'
+        quietly count if `touse'
+        local n_use = r(N)
+        if `n_use' < 2 {
+            display as error "too few observations with positive treated weights"
+            exit 2000
+        }
+    }
+    else if "`targetsample'" == "control" {
+        /* Weight by 1 - propensity score (1 - W.hat) */
+        quietly gen double `obsweight' = (1 - `whatvar') if `touse'
+        quietly replace `touse' = 0 if `obsweight' < 1e-12 & `touse'
+        quietly count if `touse'
+        local n_use = r(N)
+        if `n_use' < 2 {
+            display as error "too few observations with positive control weights"
             exit 2000
         }
     }
@@ -134,30 +169,61 @@ program define grf_best_linear_projection, eclass
     display as text ""
 
     /* ---- Run OLS with specified vcov.type via Mata ---- */
-    /* For target.sample="all" with HC3, use Stata's built-in for simplicity */
-    if "`targetsample'" == "all" & "`vcovtype'" == "HC3" {
-        regress `dr_score' `proj_vars' if `touse', vce(hc3)
+    /* When clusters are present, use cluster-robust VCE */
+    if "`cluster_var'" != "" {
+        confirm numeric variable `cluster_var'
+        if "`targetsample'" == "all" {
+            regress `dr_score' `proj_vars' if `touse', vce(cluster `cluster_var')
+        }
+        else {
+            /* weighted regression with cluster VCE (overlap/treated/control) */
+            quietly summarize `obsweight' if `touse'
+            local wt_sum = r(sum)
+            tempvar nweight
+            quietly gen double `nweight' = `obsweight' * `n_use' / `wt_sum' if `touse'
+            regress `dr_score' `proj_vars' [aweight=`nweight'] if `touse', ///
+                vce(cluster `cluster_var')
+        }
+    }
+    else if "`targetsample'" == "all" & "`vcovtype'" == "HC3" {
+        /* HC3 matching R's sandwich::vcovCL (each obs its own cluster):
+         * pure HC3 = (X'X)^{-1} X' diag(e^2/(1-h_ii)^2) X (X'X)^{-1}
+         * Stata's vce(hc3) adds a (n-1)/(n-k) factor; use Mata for exact match */
+        quietly regress `dr_score' `proj_vars' if `touse'
+        tempname V_hc3
+        mata: _grf_blp_hc_unweighted("`dr_score'", "`proj_vars'", "`touse'", ///
+            "HC3", "`V_hc3'")
+        ereturn repost V = `V_hc3'
+        ereturn display
     }
     else if "`targetsample'" == "all" & "`vcovtype'" == "HC2" {
-        regress `dr_score' `proj_vars' if `touse', vce(hc2)
+        /* HC2 matching R's sandwich::vcovCL (each obs its own cluster):
+         * pure HC2 = (X'X)^{-1} X' diag(e^2/(1-h_ii)) X (X'X)^{-1}
+         * Stata's vce(hc2) adds a (n-1)/(n-k) factor; use Mata for exact match */
+        quietly regress `dr_score' `proj_vars' if `touse'
+        tempname V_hc2
+        mata: _grf_blp_hc_unweighted("`dr_score'", "`proj_vars'", "`touse'", ///
+            "HC2", "`V_hc2'")
+        ereturn repost V = `V_hc2'
+        ereturn display
     }
     else if "`targetsample'" == "all" & "`vcovtype'" == "HC1" {
+        /* HC1 = n/(n-k) * HC0; Stata vce(robust) matches this exactly */
         regress `dr_score' `proj_vars' if `touse', vce(robust)
     }
     else if "`targetsample'" == "all" & "`vcovtype'" == "HC0" {
-        /* HC0 needs manual computation; run OLS first for coefficients */
+        /* HC0 matching R's sandwich::vcovCL (each obs its own cluster):
+         * n/(n-1) * (X'X)^{-1} X' diag(e^2) X (X'X)^{-1}
+         * Run OLS first for coefficients, then repost with HC0 vcov via Mata */
         quietly regress `dr_score' `proj_vars' if `touse'
-        local k = e(df_m) + 1
-        /* Repost with HC0 vcov via Mata */
-        tempname b_ols V_hc0
-        matrix `b_ols' = e(b)
+        tempname V_hc0
         mata: _grf_blp_hc0("`dr_score'", "`proj_vars'", "`touse'", ///
             "`V_hc0'")
         ereturn repost V = `V_hc0'
         ereturn display
     }
     else {
-        /* target.sample="overlap": weighted regression via Mata */
+        /* weighted regression via Mata (overlap/treated/control) */
         /* Normalize weights to sum to n for proper regression */
         quietly summarize `obsweight' if `touse'
         local wt_sum = r(sum)
@@ -202,8 +268,66 @@ void _grf_blp_hc0(string scalar yvar, string scalar xvars,
     XpX_inv = invsym(cross(X, X))
     e = y - X * (XpX_inv * cross(X, y))
 
-    /* HC0: (X'X)^{-1} X' diag(e^2) X (X'X)^{-1} */
-    V = XpX_inv * cross(X, e:^2, X) * XpX_inv
+    /* HC0 matching R's sandwich::vcovCL with each obs as own cluster:
+     * V = n/(n-1) * (X'X)^{-1} X' diag(e^2) X (X'X)^{-1}
+     * The n/(n-1) factor comes from the cadjust=g/(g-1) correction in vcovCL
+     * when each observation is its own cluster (g=n). */
+    V = (n / (n - 1)) * XpX_inv * cross(X, e:^2, X) * XpX_inv
+
+    st_matrix(vname, V)
+    st_matrixcolstripe(vname, st_matrixcolstripe("e(V)"))
+    st_matrixrowstripe(vname, st_matrixrowstripe("e(V)"))
+}
+end
+
+/* ====================================================================
+ * Mata helper: HC2/HC3 sandwich variance (unweighted), matching R's vcovCL
+ * with each observation as its own cluster (no small-sample correction).
+ *
+ * R's sandwich::vcovCL with HC3 and each obs as own cluster computes:
+ *   pure HC3 = (X'X)^{-1} X' diag(e^2/(1-h_ii)^2) X (X'X)^{-1}
+ * (the (n-1)/n and n/(n-1) factors from vcovCL cancel for HC3)
+ *
+ * For HC2:
+ *   pure HC2 = (X'X)^{-1} X' diag(e^2/(1-h_ii)) X (X'X)^{-1}
+ * (same cancellation applies)
+ *
+ * Stata's built-in vce(hc3) and vce(hc2) add a (n-1)/(n-k) prefactor
+ * which differs from R's convention -- so we use Mata here.
+ * ==================================================================== */
+mata:
+void _grf_blp_hc_unweighted(string scalar yvar, string scalar xvars,
+                              string scalar tousevar,
+                              string scalar hctype, string scalar vname)
+{
+    real matrix X, XpX_inv, V
+    real colvector y, e, h
+    real scalar n, k, i
+
+    st_view(y, ., yvar, tousevar)
+    st_view(X, ., tokens(xvars), tousevar)
+    /* Add constant */
+    X = X, J(rows(X), 1, 1)
+    n = rows(X)
+    k = cols(X)
+
+    XpX_inv = invsym(cross(X, X))
+    e = y - X * (XpX_inv * cross(X, y))
+
+    /* Compute hat values h_ii = x_i' (X'X)^{-1} x_i */
+    h = J(n, 1, 0)
+    for (i = 1; i <= n; i++) {
+        h[i] = X[i,.] * XpX_inv * X[i,.]'
+    }
+
+    if (hctype == "HC2") {
+        /* Pure HC2: (X'X)^{-1} X' diag(e^2/(1-h)) X (X'X)^{-1} */
+        V = XpX_inv * cross(X, e:^2 :/ (1 :- h), X) * XpX_inv
+    }
+    else {
+        /* Pure HC3: (X'X)^{-1} X' diag(e^2/(1-h)^2) X (X'X)^{-1} */
+        V = XpX_inv * cross(X, e:^2 :/ (1 :- h):^2, X) * XpX_inv
+    }
 
     st_matrix(vname, V)
     st_matrixcolstripe(vname, st_matrixcolstripe("e(V)"))

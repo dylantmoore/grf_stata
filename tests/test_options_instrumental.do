@@ -185,19 +185,19 @@ else {
     display as result "PASS: reducedformweight(0.5)"
 }
 
-* ---- Test 12: stabilizesplits (turns ON, default is OFF for instrumental) ----
+* ---- Test 12: nostabilizesplits (opt-out, default is ON for instrumental) ----
 capture noisily {
-    grf_instrumental_forest y w z x1-x5, gen(iv12) ntrees(100) seed(42) stabilizesplits
+    grf_instrumental_forest y w z x1-x5, gen(iv12) ntrees(100) seed(42) nostabilizesplits
     assert !missing(iv12) in 1
-    assert e(stabilize_splits) == 1
+    assert e(stabilize_splits) == 0
     drop iv12
 }
 if _rc {
-    display as error "FAIL: stabilizesplits"
+    display as error "FAIL: nostabilizesplits"
     local errors = `errors' + 1
 }
 else {
-    display as result "PASS: stabilizesplits"
+    display as result "PASS: nostabilizesplits"
 }
 
 * ---- Test 13: nuisancetrees(100) ----
@@ -285,7 +285,7 @@ capture noisily {
         mtry(3) minnodesize(10) samplefrac(0.4) honestyfrac(0.7)         ///
         nohonestyprune alpha(0.1) imbalancepenalty(0.5)                   ///
         cigroupsize(2) numthreads(2) reducedformweight(0.5)               ///
-        stabilizesplits nuisancetrees(100) estimatevariance               ///
+        nostabilizesplits nuisancetrees(100) estimatevariance               ///
         vargenerate(var18)
     assert !missing(iv18) in 1
     assert !missing(var18) in 1
@@ -298,7 +298,7 @@ capture noisily {
     assert reldif(e(imbalance_penalty), 0.5) < 1e-6
     assert e(ci_group_size) == 2
     assert reldif(e(reduced_form_wt), 0.5) < 1e-6
-    assert e(stabilize_splits) == 1
+    assert e(stabilize_splits) == 0
     drop iv18 var18
 }
 if _rc {
@@ -314,7 +314,7 @@ capture noisily {
     grf_instrumental_forest y w z x1-x5, gen(iv19) ntrees(100) seed(42)
     assert e(honesty) == 1
     assert e(honesty_prune) == 1
-    assert e(stabilize_splits) == 0
+    assert e(stabilize_splits) == 1
     assert reldif(e(reduced_form_wt), 0.0) < 1e-6
     assert e(mtry) == 0
     assert e(min_node) == 5

@@ -181,6 +181,63 @@ else {
 }
 
 * ============================================================
+* Test 8: numtreesvariance() changes SE
+* ============================================================
+capture noisily {
+    * Restore continuous treatment data
+    capture drop w y
+    gen w = rnormal()
+    gen y = x1 + w * x2 + rnormal()
+
+    grf_causal_forest y w x1-x5, gen(tau_ape8) ntrees(100) seed(42)
+
+    * Default numtreesvariance (500)
+    grf_average_partial_effect
+    local se_default = r(std_err)
+
+    * Custom numtreesvariance (100)
+    grf_average_partial_effect, numtreesvariance(100)
+    local se_100 = r(std_err)
+
+    * Both should be positive
+    assert `se_default' > 0
+    assert `se_100' > 0
+
+    drop tau_ape8 _grf_yhat _grf_what y w
+}
+if _rc {
+    display as error "FAIL: APE numtreesvariance changes SE"
+    local errors = `errors' + 1
+}
+else {
+    display as result "PASS: APE numtreesvariance changes SE"
+}
+
+* ============================================================
+* Test 9: APE with in restriction
+* ============================================================
+capture noisily {
+    capture drop w y
+    gen w = rnormal()
+    gen y = x1 + w * x2 + rnormal()
+
+    grf_causal_forest y w x1-x5, gen(tau_ape9) ntrees(100) seed(42)
+    grf_average_partial_effect in 1/400
+    local saved_N = r(N)
+    assert !missing(r(estimate))
+    assert `saved_N' <= 400
+    assert `saved_N' > 0
+    drop tau_ape9 _grf_yhat _grf_what y w
+}
+if _rc {
+    display as error "FAIL: APE with in restriction"
+    local errors = `errors' + 1
+}
+else {
+    display as result "PASS: APE with in restriction"
+}
+
+* ============================================================
 * Summary
 * ============================================================
 display ""

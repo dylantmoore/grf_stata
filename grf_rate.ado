@@ -16,6 +16,7 @@ program define grf_rate, rclass
             BOOTstrap(integer 200)      ///
             CATEvar(varname numeric)    ///
             COMPliancescore(varname numeric) ///
+            DEBIASINGweights(varname numeric) ///
             SEED(integer -1)            ///
         ]
 
@@ -135,6 +136,19 @@ program define grf_rate, rclass
                 gen double `y_resid' = `depvar' - `yhatvar' - `tauvar' * `w_resid' if `touse'
                 gen double `dr_score' = `tauvar' + (`w_resid' / `w_resid_var') * `y_resid' if `touse'
             }
+        }
+    }
+
+    /* ---- Apply debiasing weights if specified ---- */
+    if "`debiasingweights'" != "" {
+        confirm numeric variable `debiasingweights'
+        markout `touse' `debiasingweights'
+        quietly count if `touse'
+        local n_use = r(N)
+        if `use_dr' {
+            tempvar dw_dr
+            quietly gen double `dw_dr' = `dr_score' * `debiasingweights' if `touse'
+            quietly replace `dr_score' = `dw_dr' if `touse'
         }
     }
 

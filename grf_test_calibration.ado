@@ -18,6 +18,7 @@ program define grf_test_calibration, rclass
     local tauvar   "`e(predict_var)'"
     local yhatvar  "`e(yhat_var)'"
     local whatvar  "`e(what_var)'"
+    local cluster_var "`e(cluster_var)'"
 
     /* ---- Confirm required variables exist ---- */
     foreach v in depvar treatvar tauvar yhatvar whatvar {
@@ -88,7 +89,14 @@ program define grf_test_calibration, rclass
      * so downstream post-estimation commands that depend on e() will still
      * need to re-fit the causal forest (or call this last).
      */
-    quietly regress `cal_lhs' `cal_rhs1' `cal_rhs2' if `touse', noconstant vce(hc3)
+    if "`cluster_var'" != "" {
+        confirm numeric variable `cluster_var'
+        quietly regress `cal_lhs' `cal_rhs1' `cal_rhs2' if `touse', ///
+            noconstant vce(cluster `cluster_var')
+    }
+    else {
+        quietly regress `cal_lhs' `cal_rhs1' `cal_rhs2' if `touse', noconstant vce(hc3)
+    }
 
     /* Extract coefficients */
     local b_mean  = _b[`cal_rhs1']

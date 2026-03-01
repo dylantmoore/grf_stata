@@ -345,10 +345,146 @@ else {
 }
 
 * ============================================================
-* Test 13: grf_tune returns consistent results with same seed
+* Test 13: grf_tune probability with nclasses(3)
 * ============================================================
 
-* ---- Test 13: grf_tune reproducibility with same seed ----
+* ---- Test 13: grf_tune probability with nclasses(3) ----
+capture noisily {
+    * Create 3-class outcome
+    capture drop y3class
+    gen y3class = floor(3 * runiform())
+    grf_tune y3class x1-x5, foresttype("probability") nclasses(3) ///
+        numreps(10) tunetrees(50) seed(42)
+    assert !missing(r(best_mtry))
+    assert r(best_mtry) >= 1
+    assert !missing(r(best_mse))
+    assert r(best_mse) > 0
+    assert "`r(forest_type)'" == "probability"
+    drop y3class
+}
+if _rc {
+    display as error "FAIL: grf_tune probability nclasses(3)"
+    local errors = `errors' + 1
+}
+else {
+    display as result "PASS: grf_tune probability nclasses(3)"
+}
+
+* ============================================================
+* Test 14: grf_tune survival with numfailures(10)
+* ============================================================
+
+* ---- Test 14: grf_tune survival numfailures(10) ----
+capture noisily {
+    grf_tune time_surv status_surv x1-x5, foresttype("survival") ///
+        numfailures(10) numreps(10) tunetrees(50) seed(42)
+    assert !missing(r(best_mtry))
+    assert r(best_mtry) >= 1
+    assert !missing(r(best_mse))
+    assert r(best_mse) > 0
+    assert "`r(forest_type)'" == "survival"
+}
+if _rc {
+    display as error "FAIL: grf_tune survival numfailures(10)"
+    local errors = `errors' + 1
+}
+else {
+    display as result "PASS: grf_tune survival numfailures(10)"
+}
+
+* ============================================================
+* Test 15: grf_tune survival with predtype(0) (Nelson-Aalen)
+* ============================================================
+
+* ---- Test 15: grf_tune survival predtype(0) ----
+capture noisily {
+    grf_tune time_surv status_surv x1-x5, foresttype("survival") ///
+        predtype(0) numreps(10) tunetrees(50) seed(42)
+    assert !missing(r(best_mtry))
+    assert r(best_mtry) >= 1
+    assert !missing(r(best_mse))
+    assert r(best_mse) > 0
+    assert "`r(forest_type)'" == "survival"
+}
+if _rc {
+    display as error "FAIL: grf_tune survival predtype(0)"
+    local errors = `errors' + 1
+}
+else {
+    display as result "PASS: grf_tune survival predtype(0)"
+}
+
+* ============================================================
+* Test 16: grf_tune instrumental with reducedformweight(0.5)
+* ============================================================
+
+* ---- Test 16: grf_tune instrumental reducedformweight(0.5) ----
+capture noisily {
+    grf_tune y w z x1-x5, foresttype("instrumental") ///
+        reducedformweight(0.5) numreps(10) tunetrees(50) seed(42)
+    assert !missing(r(best_mtry))
+    assert r(best_mtry) >= 1
+    assert !missing(r(best_mse))
+    assert r(best_mse) > 0
+    assert "`r(forest_type)'" == "instrumental"
+}
+if _rc {
+    display as error "FAIL: grf_tune instrumental reducedformweight(0.5)"
+    local errors = `errors' + 1
+}
+else {
+    display as result "PASS: grf_tune instrumental reducedformweight(0.5)"
+}
+
+* ============================================================
+* Test 17: grf_tune causal_survival with horizon(1.5)
+* ============================================================
+
+* ---- Test 17: grf_tune causal_survival horizon(1.5) ----
+capture noisily {
+    grf_tune time_surv status_surv w x1-x5, foresttype("causal_survival") ///
+        horizon(1.5) numreps(10) tunetrees(50) seed(42)
+    assert !missing(r(best_mtry))
+    assert r(best_mtry) >= 1
+    assert !missing(r(best_mse))
+    assert r(best_mse) > 0
+    assert "`r(forest_type)'" == "causal_survival"
+}
+if _rc {
+    display as error "FAIL: grf_tune causal_survival horizon(1.5)"
+    local errors = `errors' + 1
+}
+else {
+    display as result "PASS: grf_tune causal_survival horizon(1.5)"
+}
+
+* ============================================================
+* Test 18: grf_tune causal_survival with target(2)
+* ============================================================
+
+* ---- Test 18: grf_tune causal_survival target(2) ----
+capture noisily {
+    grf_tune time_surv status_surv w x1-x5, foresttype("causal_survival") ///
+        target(2) numreps(10) tunetrees(50) seed(42)
+    assert !missing(r(best_mtry))
+    assert r(best_mtry) >= 1
+    assert !missing(r(best_mse))
+    assert r(best_mse) > 0
+    assert "`r(forest_type)'" == "causal_survival"
+}
+if _rc {
+    display as error "FAIL: grf_tune causal_survival target(2)"
+    local errors = `errors' + 1
+}
+else {
+    display as result "PASS: grf_tune causal_survival target(2)"
+}
+
+* ============================================================
+* Test 19: grf_tune returns consistent results with same seed
+* ============================================================
+
+* ---- Test 19: grf_tune reproducibility with same seed ----
 capture noisily {
     grf_tune y x1-x5, foresttype("regression") numreps(10) tunetrees(50) seed(99)
     local mtry_1 = r(best_mtry)
@@ -384,5 +520,5 @@ if `errors' > 0 {
     exit 1
 }
 else {
-    display as result "ALL TUNE EXTENDED TESTS PASSED (13 forest types + reproducibility)"
+    display as result "ALL TUNE EXTENDED TESTS PASSED (19 tests: 12 forest types + 6 option tests + reproducibility)"
 }

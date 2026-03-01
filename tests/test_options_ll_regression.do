@@ -199,19 +199,19 @@ else {
     display as result "PASS: estimatevariance + vargenerate"
 }
 
-* ---- Test 13: llsplit ----
+* ---- Test 13: llenable ----
 capture noisily {
-    grf_ll_regression_forest y x1-x5, gen(ll13) ntrees(100) seed(42) llsplit
+    grf_ll_regression_forest y x1-x5, gen(ll13) ntrees(100) seed(42) llenable
     assert !missing(ll13) in 1
     assert e(enable_ll_split) == 1
     drop ll13
 }
 if _rc {
-    display as error "FAIL: llsplit"
+    display as error "FAIL: llenable"
     local errors = `errors' + 1
 }
 else {
-    display as result "PASS: llsplit"
+    display as result "PASS: llenable"
 }
 
 * ---- Test 14: lllambda(0.5) ----
@@ -296,7 +296,7 @@ capture noisily {
         mtry(3) minnodesize(10) samplefrac(0.4) honestyfrac(0.7)      ///
         nohonestyprune alpha(0.1) imbalancepenalty(0.5) cigroupsize(2) ///
         numthreads(2) estimatevariance vargenerate(llvar19)            ///
-        llsplit lllambda(0.5) llweightpenalty llcutoff(10)
+        llenable lllambda(0.5) llweightpenalty llcutoff(10)
     assert !missing(ll19) in 1
     assert !missing(llvar19) in 1
     assert e(mtry) == 3

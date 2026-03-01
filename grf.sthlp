@@ -104,6 +104,33 @@ in {cmd:e()} or {cmd:r()}, and run multithreaded by default.
 The package includes pre-compiled plugin binaries for macOS (ARM64 and x86_64),
 Linux (x86_64), and Windows (x86_64).  Stata 14.0 or later is required.
 
+{marker limitations}{...}
+{title:Known limitations vs R's grf}
+
+{pstd}
+The following R features are not available in the Stata version:
+
+{phang}{bf:User-supplied nuisance estimates.}
+R supports pre-computed {cmd:W.hat}, {cmd:Y.hat}, {cmd:Z.hat} for
+causal, instrumental, and related forests. Stata always estimates
+nuisance parameters internally via regression forests.{p_end}
+
+{phang}{bf:Local linear split variable selection.}
+R's {cmd:ll.split.variables} accepts a vector of variable indices.
+Stata's {cmd:llsplit} is a boolean toggle that enables local linear
+splitting on all variables.{p_end}
+
+{phang}{bf:APE deprecation.}
+R has deprecated {cmd:average_partial_effect()} in favor of
+{cmd:average_treatment_effect()} with continuous treatment.
+Stata retains {helpb grf_average_partial_effect:grf_average_partial_effect}
+as a standalone command.{p_end}
+
+{phang}{bf:Causal survival DR scores.}
+{cmd:grf_get_scores} after {cmd:grf_causal_survival_forest} returns
+plug-in CATE scores, not full AIPW doubly-robust scores. Full survival
+DR scores require censoring hazard estimates not available in {cmd:e()}.{p_end}
+
 {marker references}{...}
 {title:References}
 

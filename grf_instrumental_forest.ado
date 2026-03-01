@@ -36,6 +36,9 @@ program define grf_instrumental_forest, eclass
             CLuster(varname numeric)           ///
             WEIghts(varname numeric)           ///
             EQUALizeclusterweights             ///
+            TUNEParameters(string)             ///
+            TUNENumtrees(integer 200)          ///
+            TUNENumreps(integer 50)            ///
         ]
 
     /* ---- Parse honesty ---- */
@@ -163,6 +166,48 @@ program define grf_instrumental_forest, eclass
         local n_output 2
     }
 
+        /* ---- Inline tuning ---- */
+    if `"`tuneparameters'"' != "" {
+        display as text ""
+        display as text "Running inline parameter tuning..."
+        display as text "  Parameters: `tuneparameters'"
+        display as text "  Tune trees: `tunenumtrees'  Tune reps: `tunenumreps'"
+
+        /* Call grf_tune to find best parameters */
+        grf_tune `varlist' if `touse', foresttype(instrumental) ///
+            numreps(`tunenumreps') tunetrees(`tunenumtrees') seed(`seed') ///
+            numthreads(`numthreads')
+
+        /* Override specified parameters with tuned values */
+        foreach _tp of local tuneparameters {
+            if "`_tp'" == "mtry" {
+                local mtry = r(best_mtry)
+                display as text "  Tuned mtry: `mtry'"
+            }
+            else if "`_tp'" == "minnodesize" {
+                local minnodesize = r(best_min_node_size)
+                display as text "  Tuned min_node_size: `minnodesize'"
+            }
+            else if "`_tp'" == "samplefrac" {
+                local samplefrac = r(best_sample_fraction)
+                display as text "  Tuned sample_fraction: `samplefrac'"
+            }
+            else if "`_tp'" == "honestyfrac" {
+                local honestyfrac = r(best_honesty_fraction)
+                display as text "  Tuned honesty_fraction: `honestyfrac'"
+            }
+            else if "`_tp'" == "alpha" {
+                local alpha = r(best_alpha)
+                display as text "  Tuned alpha: `alpha'"
+            }
+            else if "`_tp'" == "imbalancepenalty" {
+                local imbalancepenalty = r(best_imbalance_penalty)
+                display as text "  Tuned imbalance_penalty: `imbalancepenalty'"
+            }
+        }
+        display as text ""
+    }
+
     /* ---- Display header ---- */
     display as text ""
     display as text "Generalized Random Forest: Instrumental Forest"
@@ -226,6 +271,15 @@ program define grf_instrumental_forest, eclass
             local _nuis_offset = 1
         }
         local _nuis_weight_idx = `_nuis_data_cols' + `_nuis_offset' + 1
+    }
+
+    /* Build extra_vars for nuisance calls (must be before nuisance plugin calls) */
+    local extra_vars ""
+    if "`cluster_var'" != "" {
+        local extra_vars `extra_vars' `cluster_var'
+    }
+    if "`weight_var'" != "" {
+        local extra_vars `extra_vars' `weight_var'
     }
 
     /* ---- Step 1: Y.hat ---- */

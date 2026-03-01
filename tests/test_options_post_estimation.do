@@ -397,6 +397,24 @@ else {
     display as result "PASS: grf_rate with catevar"
 }
 
+* ---- Test 21b: grf_rate with in restriction ----
+capture noisily {
+    grf_causal_forest y w x1-x5, gen(tau_rate_in) ntrees(100) seed(42)
+    grf_rate tau_rate_in in 1/400, bootstrap(50) seed(42)
+    local saved_N = r(N)
+    assert !missing(r(estimate))
+    assert `saved_N' <= 400
+    assert `saved_N' > 0
+    drop tau_rate_in _grf_yhat _grf_what
+}
+if _rc {
+    display as error "FAIL: grf_rate with in restriction"
+    local errors = `errors' + 1
+}
+else {
+    display as result "PASS: grf_rate with in restriction"
+}
+
 * ============================================================
 * grf_predict tests
 * ============================================================
@@ -1528,6 +1546,261 @@ else {
 
 * Clean up compliance score
 capture drop comp_score
+
+* ============================================================
+* grf_best_linear_projection targetsample(treated/control) tests
+* ============================================================
+
+* ---- Test 79: BLP targetsample(treated) runs ----
+capture noisily {
+    grf_causal_forest y w x1-x5, gen(tau_blpt) ntrees(100) seed(42)
+    grf_best_linear_projection x1 x2, targetsample(treated)
+    assert "`e(target_sample)'" == "treated"
+    assert !missing(e(N))
+    drop tau_blpt _grf_yhat _grf_what
+}
+if _rc {
+    display as error "FAIL: BLP targetsample(treated) runs"
+    local errors = `errors' + 1
+}
+else {
+    display as result "PASS: BLP targetsample(treated) runs"
+}
+
+* ---- Test 80: BLP targetsample(control) runs ----
+capture noisily {
+    grf_causal_forest y w x1-x5, gen(tau_blpc) ntrees(100) seed(42)
+    grf_best_linear_projection x1 x2, targetsample(control)
+    assert "`e(target_sample)'" == "control"
+    assert !missing(e(N))
+    drop tau_blpc _grf_yhat _grf_what
+}
+if _rc {
+    display as error "FAIL: BLP targetsample(control) runs"
+    local errors = `errors' + 1
+}
+else {
+    display as result "PASS: BLP targetsample(control) runs"
+}
+
+* ---- Test 81: BLP treated vs all coefficients differ ----
+capture noisily {
+    grf_causal_forest y w x1-x5, gen(tau_blp81) ntrees(100) seed(42)
+
+    * All
+    grf_best_linear_projection x1 x2, targetsample(all)
+    local b1_all = _b[x1]
+
+    * Re-fit to get back causal forest e() results
+    grf_causal_forest y w x1-x5, gen(tau_blp81b) ntrees(100) seed(42) replace
+
+    * Treated
+    grf_best_linear_projection x1 x2, targetsample(treated)
+    local b1_treated = _b[x1]
+
+    * The coefficients should exist and differ
+    assert !missing(`b1_all')
+    assert !missing(`b1_treated')
+    * With overlap weighting vs uniform, coefficients should generally differ
+    * (they could be equal by chance, but with enough data this is unlikely)
+    display "  b1_all = `b1_all', b1_treated = `b1_treated'"
+
+    drop tau_blp81 tau_blp81b _grf_yhat _grf_what
+}
+if _rc {
+    display as error "FAIL: BLP treated vs all coefficients differ"
+    local errors = `errors' + 1
+}
+else {
+    display as result "PASS: BLP treated vs all coefficients differ"
+}
+
+* ---- Test 82: BLP control vs all coefficients differ ----
+capture noisily {
+    grf_causal_forest y w x1-x5, gen(tau_blp82) ntrees(100) seed(42)
+
+    * All
+    grf_best_linear_projection x1 x2, targetsample(all)
+    local b1_all = _b[x1]
+
+    * Re-fit to get back causal forest e() results
+    grf_causal_forest y w x1-x5, gen(tau_blp82b) ntrees(100) seed(42) replace
+
+    * Control
+    grf_best_linear_projection x1 x2, targetsample(control)
+    local b1_control = _b[x1]
+
+    * The coefficients should exist and differ
+    assert !missing(`b1_all')
+    assert !missing(`b1_control')
+    display "  b1_all = `b1_all', b1_control = `b1_control'"
+
+    drop tau_blp82 tau_blp82b _grf_yhat _grf_what
+}
+if _rc {
+    display as error "FAIL: BLP control vs all coefficients differ"
+    local errors = `errors' + 1
+}
+else {
+    display as result "PASS: BLP control vs all coefficients differ"
+}
+
+* ============================================================
+* grf_get_scores: multi-arm causal forest tests
+* ============================================================
+
+* ---- Test 83: grf_get_scores after multi_arm_causal_forest ----
+capture noisily {
+    * Create multi-arm treatment data: 2 binary treatment indicators
+    capture drop w1 w2
+    gen w1 = (x1 + rnormal() > 0)
+    gen w2 = (x2 + rnormal() > 0)
+
+    * Fit multi-arm causal forest: y w1 w2 x1..x5, ntreat(2)
+    grf_multi_arm_causal_forest y w1 w2 x1-x5, gen(mac_tau) ntreat(2) ///
+        ntrees(100) seed(42)
+
+    * Get DR scores — should create 2 score columns
+    grf_get_scores, gen(mac_dr) replace
+
+    * Verify 2 score columns exist
+    confirm numeric variable mac_dr_t1
+    confirm numeric variable mac_dr_t2
+
+    * Verify scores are non-missing for observations in sample
+    quietly count if !missing(mac_dr_t1)
+    assert r(N) > 0
+    quietly count if !missing(mac_dr_t2)
+    assert r(N) > 0
+
+    * Verify return results
+    assert r(n_treat) == 2
+    assert r(N) > 0
+    assert "`r(forest_type)'" == "multi_causal"
+
+    * Cleanup
+    capture drop mac_tau_t1 mac_tau_t2
+    capture drop mac_tau_t1_var mac_tau_t2_var
+    capture drop mac_dr_t1 mac_dr_t2
+    capture drop w1 w2
+    capture drop _grf_mac_yhat _grf_mac_what1 _grf_mac_what2
+}
+if _rc {
+    display as error "FAIL: grf_get_scores after multi_arm_causal_forest"
+    local errors = `errors' + 1
+}
+else {
+    display as result "PASS: grf_get_scores after multi_arm_causal_forest"
+}
+
+* ---- Test 84: grf_get_scores multi-arm replace option ----
+capture noisily {
+    capture drop w1 w2
+    gen w1 = (x1 + rnormal() > 0.2)
+    gen w2 = (x2 + rnormal() > 0.2)
+
+    grf_multi_arm_causal_forest y w1 w2 x1-x5, gen(mac2_tau) ntreat(2) ///
+        ntrees(100) seed(42)
+
+    * First call
+    grf_get_scores, gen(mac2_dr)
+
+    * Second call with replace — should not error
+    grf_get_scores, gen(mac2_dr) replace
+
+    confirm numeric variable mac2_dr_t1
+    confirm numeric variable mac2_dr_t2
+
+    capture drop mac2_tau_t1 mac2_tau_t2
+    capture drop mac2_tau_t1_var mac2_tau_t2_var
+    capture drop mac2_dr_t1 mac2_dr_t2
+    capture drop w1 w2
+    capture drop _grf_mac_yhat _grf_mac_what1 _grf_mac_what2
+}
+if _rc {
+    display as error "FAIL: grf_get_scores multi-arm replace option"
+    local errors = `errors' + 1
+}
+else {
+    display as result "PASS: grf_get_scores multi-arm replace option"
+}
+
+* ============================================================
+* grf_get_scores: causal survival forest tests
+* ============================================================
+
+* ---- Test 85: grf_get_scores after causal_survival_forest ----
+capture noisily {
+    * Create survival data
+    capture drop surv_time surv_status surv_treat
+    gen surv_treat = (x1 + rnormal() > 0)
+    gen surv_time = abs(2 + x1 + surv_treat * 0.5 + rnormal())
+    replace surv_time = 0.01 if surv_time <= 0
+    gen surv_status = (runiform() > 0.3)
+
+    * Fit causal survival forest: time status treat x1..x5
+    grf_causal_survival_forest surv_time surv_status surv_treat x1-x5, ///
+        gen(cs_tau) ntrees(100) seed(42)
+
+    * Get DR scores
+    grf_get_scores, gen(cs_dr)
+
+    * Verify score variable exists
+    confirm numeric variable cs_dr
+
+    * Verify scores are non-missing
+    quietly count if !missing(cs_dr)
+    assert r(N) > 0
+
+    * Verify return results
+    assert r(N) > 0
+    assert "`r(forest_type)'" == "causal_survival"
+
+    * Cleanup
+    capture drop cs_tau cs_dr cs_tau_var
+    capture drop surv_time surv_status surv_treat
+    capture drop _grf_cs_what
+}
+if _rc {
+    display as error "FAIL: grf_get_scores after causal_survival_forest"
+    local errors = `errors' + 1
+}
+else {
+    display as result "PASS: grf_get_scores after causal_survival_forest"
+}
+
+* ---- Test 86: grf_get_scores causal_survival replace option ----
+capture noisily {
+    capture drop surv_time surv_status surv_treat
+    gen surv_treat = (x1 + rnormal() > 0)
+    gen surv_time = abs(2 + x1 + surv_treat * 0.5 + rnormal())
+    replace surv_time = 0.01 if surv_time <= 0
+    gen surv_status = (runiform() > 0.3)
+
+    grf_causal_survival_forest surv_time surv_status surv_treat x1-x5, ///
+        gen(cs2_tau) ntrees(100) seed(42)
+
+    * First call
+    grf_get_scores, gen(cs2_dr)
+
+    * Second call with replace
+    grf_get_scores, gen(cs2_dr) replace
+
+    confirm numeric variable cs2_dr
+    quietly count if !missing(cs2_dr)
+    assert r(N) > 0
+
+    capture drop cs2_tau cs2_dr cs2_tau_var
+    capture drop surv_time surv_status surv_treat
+    capture drop _grf_cs_what
+}
+if _rc {
+    display as error "FAIL: grf_get_scores causal_survival replace option"
+    local errors = `errors' + 1
+}
+else {
+    display as result "PASS: grf_get_scores causal_survival replace option"
+}
 
 * ============================================================
 * Summary

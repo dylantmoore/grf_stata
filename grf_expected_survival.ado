@@ -37,25 +37,65 @@ program define grf_expected_survival, rclass
     }
 
     /* ---- Determine number of survival curve columns ---- */
-    local n_output = e(n_output)
-    if missing(`n_output') | `n_output' < 1 {
-        /* Count how many stub_sN variables exist */
-        local n_output 0
+    /* Start with the declared upper bound from e(n_output) */
+    local n_output_declared = e(n_output)
+    if missing(`n_output_declared') | `n_output_declared' < 1 {
+        /* Count how many stub_sN variables exist (variable existence check) */
+        local n_output_declared 0
         local keep_looking 1
         while `keep_looking' {
-            local next = `n_output' + 1
+            local next = `n_output_declared' + 1
             capture confirm numeric variable `predictions'_s`next'
             if _rc {
                 local keep_looking 0
             }
             else {
-                local n_output = `next'
+                local n_output_declared = `next'
+            }
+        }
+    }
+
+    if `n_output_declared' < 1 {
+        display as error "no survival curve variables found"
+        display as error "expected variables named `predictions'_s1, `predictions'_s2, ..."
+        exit 111
+    }
+
+    /* ---- Detect actual filled columns (plugin may fill fewer than n_output_declared) ----
+     *
+     * When grf_survival_forest is called with noutput(k) but the data has fewer
+     * than k unique failure times, the plugin fills only as many columns as there
+     * are unique failure times.  The remainder are left as missing (.).
+     * We detect the true count by finding the last column that has any non-missing
+     * values.
+     */
+    local n_output `n_output_declared'
+    quietly {
+        /* Walk backwards from declared upper bound to find last non-missing column */
+        local found_last 0
+        local j_check `n_output_declared'
+        while `j_check' > 0 & !`found_last' {
+            capture confirm numeric variable `predictions'_s`j_check'
+            if _rc {
+                /* Variable doesn't exist at all — stop here */
+                local n_output = `j_check' - 1
+                local found_last 1
+            }
+            else {
+                count if !missing(`predictions'_s`j_check')
+                if r(N) > 0 {
+                    local n_output `j_check'
+                    local found_last 1
+                }
+                else {
+                    local j_check = `j_check' - 1
+                }
             }
         }
     }
 
     if `n_output' < 1 {
-        display as error "no survival curve variables found"
+        display as error "no observations with non-missing survival curves found"
         display as error "expected variables named `predictions'_s1, `predictions'_s2, ..."
         exit 111
     }
@@ -72,7 +112,11 @@ program define grf_expected_survival, rclass
     }
 
     if "`grid'" == "" {
-        /* Reconstruct from data: use unique sorted values of the time variable */
+        /* Reconstruct from data: use ALL unique sorted failure times (where event occurred).
+         * This gives the complete grid that the GRF plugin used internally, which may
+         * be larger than the number of saved output columns if noutput was small.
+         * We then match the grid length to the actual non-missing column count.
+         */
         local timevar "`e(timevar)'"
         local statusvar "`e(statusvar)'"
 
@@ -86,7 +130,7 @@ program define grf_expected_survival, rclass
         tempvar is_event
         quietly gen byte `is_event' = (`statusvar' == 1) if !missing(`statusvar')
 
-        /* Get unique sorted failure times */
+        /* Get ALL unique sorted failure times */
         tempname grid_mat
         quietly tab `timevar' if `is_event' == 1, matrow(`grid_mat')
         local n_failures = rowsof(`grid_mat')
@@ -96,12 +140,20 @@ program define grf_expected_survival, rclass
             exit 198
         }
 
-        /* Use up to n_output failure times */
+        /* Use the first n_output failure times (matching the filled columns).
+         * The GRF plugin selects failure times in sorted order, so column j
+         * corresponds to the j-th smallest unique failure time.
+         */
         local n_grid = min(`n_failures', `n_output')
         local grid ""
         forvalues j = 1/`n_grid' {
             local t_j = `grid_mat'[`j', 1]
             local grid "`grid' `t_j'"
+        }
+
+        if `n_grid' < `n_output' {
+            /* Fewer unique failure times in data than filled columns — use all */
+            local n_output `n_grid'
         }
     }
 
@@ -115,7 +167,7 @@ program define grf_expected_survival, rclass
         /* If grid has more points than columns, truncate grid */
         if `n_grid' > `n_output' {
             display as text "Warning: grid has `n_grid' points but only" ///
-                " `n_output' survival curve columns"
+                " `n_output' survival curve columns are filled"
             display as text "  Using first `n_output' grid points"
             local new_grid ""
             local gi 0
