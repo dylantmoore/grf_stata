@@ -1,0 +1,6 @@
+TEST 18: Tune mtry + minnodesize regression_forest
+STATUS: OK
+tuned_mtry: 8
+tuned_minnodesize: 13
+pred_mean: -0.12188506
+pred_sd: 2.82789760

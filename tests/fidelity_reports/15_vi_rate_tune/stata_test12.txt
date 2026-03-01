@@ -1,0 +1,5 @@
+TEST 12: RATE AUTOC CATE priorities
+STATUS: OK
+estimate: 1.03357465
+std_err: 0.10701006
+z_stat: 9.65866849

@@ -1,0 +1,6 @@
+TEST 21: Tune mtry + minnodesize causal_forest
+STATUS: OK
+tuned_mtry: 8
+tuned_minnodesize: 1
+tau_mean: -0.11412661
+tau_sd: 0.93948353

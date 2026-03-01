@@ -1,0 +1,6 @@
+TEST 23: Tune tunenumreps=10
+STATUS: OK
+tuned_mtry: 9
+tuned_minnodesize: 2
+pred_mean: -0.03983082
+pred_sd: 2.92070638

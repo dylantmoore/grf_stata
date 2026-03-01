@@ -1,0 +1,10 @@
+TEST 20: Tune all params regression_forest
+STATUS: OK
+tuned_mtry: 8
+tuned_minnodesize: 13
+tuned_samplefrac: 0.465765
+tuned_honestyfrac: 0.554432
+tuned_alpha: 0.061998
+tuned_imbalancepenalty: 1.081053
+pred_mean: -0.11253058
+pred_sd: 2.83515350

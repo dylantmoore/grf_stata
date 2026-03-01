@@ -1,0 +1,4 @@
+TEST 16: RATE AUTOC bootstrap=500
+STATUS: OK
+estimate: 1.03357465
+std_err: 0.10736837

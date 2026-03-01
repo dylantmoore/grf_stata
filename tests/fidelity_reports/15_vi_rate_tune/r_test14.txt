@@ -1,0 +1,5 @@
+TEST 14: RATE AUTOC custom priorities X1
+STATUS: OK
+estimate: 0.83548125
+std_err: 0.14306835
+target: priorities | AUTOC

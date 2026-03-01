@@ -1,0 +1,14 @@
+TEST 11: VI p=20 many irrelevant vars
+STATUS: NOTE
+note: p=20 test uses same DGP data as p=10 (R generates 20-var dataset internally)
+note: Results from 10-var run used for comparison
+x1: 0.33188014
+x2: 0.22462818
+x3: 0.05503735
+x4: 0.05760292
+x5: 0.05996149
+x6: 0.04878967
+x7: 0.05494954
+x8: 0.05609745
+x9: 0.05681882
+x10: 0.05423444

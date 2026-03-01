@@ -1,0 +1,5 @@
+TEST 19: Tune samplefrac regression_forest
+STATUS: OK
+tuned_samplefrac: 0.465765
+pred_mean: -0.10569222
+pred_sd: 2.40133559

@@ -1,0 +1,5 @@
+TEST 16: RATE AUTOC bootstrap=500
+STATUS: OK
+estimate: 1.13417936
+std_err: 0.13457854
+target: priorities | AUTOC

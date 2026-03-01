@@ -1,0 +1,4 @@
+TEST 13: RATE QINI CATE priorities
+STATUS: OK
+estimate: 0.37552097
+std_err: 0.03385587

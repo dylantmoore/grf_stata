@@ -1,0 +1,14 @@
+"test","description","nclasses","min_cor","mean_cor","agree_rate","r_sum_dev","s_sum_dev","pass_cor","pass_agree","pass_sum","overall"
+"test01","Test 01: Binary Classification (n=500)",2,0.9952,0.9952,0.98,"3.3e-08","8.88e-16",TRUE,TRUE,TRUE,TRUE
+"test02","Test 02: 3-Class Multinomial (n=500)",3,0.9746,0.986,0.952,"5e-08","6.66e-16",TRUE,TRUE,TRUE,TRUE
+"test03","Test 03: 5-Class Multinomial (n=500)",5,0.9057,0.9668,0.938,"4.4e-08","6.66e-16",TRUE,TRUE,TRUE,TRUE
+"test04","Test 04: nclasses(2) specified vs auto (binary, n=500)",2,0.9952,0.9952,0.98,"3.3e-08","8.88e-16",TRUE,TRUE,TRUE,TRUE
+"test05","Test 05: Unbalanced Classes ~84/16 (n=500)",2,0.993,0.993,0.97,"3.3e-08","8.88e-16",TRUE,TRUE,TRUE,TRUE
+"test06","Test 06: With cluster() - 50 clusters (n=500)",2,0.9933,0.9933,0.966,"3.3e-08","7.77e-16",TRUE,TRUE,TRUE,TRUE
+"test07","Test 07: With sample weights (n=500)",2,0.9949,0.9949,0.978,"3.4e-08","1.33e-15",TRUE,TRUE,TRUE,TRUE
+"test08","Test 08: nohonesty (honesty=FALSE, n=500)",2,0.9937,0.9937,0.972,"3.5e-08","4.44e-16",TRUE,TRUE,TRUE,TRUE
+"test09","Test 09: mtry=2 (restricted splitting, n=500)",2,0.993,0.993,0.974,"3e-08","8.88e-16",TRUE,TRUE,TRUE,TRUE
+"test10","Test 10: minnodesize=20 (larger leaves, n=500)",2,0.9972,0.9972,0.972,"3e-08","1.33e-15",TRUE,TRUE,TRUE,TRUE
+"test11","Test 11: Combined cluster+weights+nohonesty (n=500)",2,0.991,0.991,0.962,"3.5e-08","1.11e-15",TRUE,TRUE,TRUE,TRUE
+"test12","Test 12: Probability sum = 1 (3-class, n=500)",3,0.9746,0.986,0.952,"5e-08","6.66e-16",TRUE,TRUE,TRUE,TRUE
+"test13","Test 13: Large sample n=2000 (binary)",2,0.9964,0.9964,0.981,"3.5e-08","1.11e-15",TRUE,TRUE,TRUE,TRUE

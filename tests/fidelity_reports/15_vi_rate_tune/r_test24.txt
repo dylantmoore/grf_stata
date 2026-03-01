@@ -1,0 +1,5 @@
+TEST 24: Tune improves MSE on held-out data
+STATUS: PASS
+mse_default: 1.56021238
+mse_tuned: 1.56021238
+tuned_better: 1

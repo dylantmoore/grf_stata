@@ -1,0 +1,6 @@
+TEST 22: Tune tunenumtrees=100
+STATUS: OK
+tuned_mtry: 8
+tuned_minnodesize: 13
+pred_mean: -0.12188506
+pred_sd: 2.82789760

@@ -1,0 +1,6 @@
+TEST 24: Tune improves MSE on held-out data
+STATUS: PASS
+mse_default_oob: 2.93404967
+mse_tuned_oob: 2.27824540
+tuned_better: 1
+note: OOB residual MSE used as proxy (Stata predict vs R held-out)

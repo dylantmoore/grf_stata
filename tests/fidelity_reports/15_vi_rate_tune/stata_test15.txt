@@ -1,0 +1,5 @@
+TEST 15: RATE AUTOC random priorities near 0
+STATUS: OK
+estimate: -0.02575926
+std_err: 0.09345587
+z_stat: -0.27563023

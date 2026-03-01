@@ -1,0 +1,4 @@
+TEST 17: RATE AUTOC with debiasing.weights
+STATUS: OK
+estimate: 1.02672861
+std_err: 0.12121670
