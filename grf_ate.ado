@@ -149,9 +149,9 @@ program define grf_ate, rclass
         tempvar wt_dev cl_sum cl_tag cl_sum_sq
         quietly gen double `wt_dev' = `tsweight' * (`dr_score' - `ate') if `touse'
         quietly bysort `cluster_var': egen double `cl_sum' = total(`wt_dev') if `touse'
-        quietly bysort `cluster_var': gen byte `cl_tag' = (_n == 1) if `touse'
-        quietly gen double `cl_sum_sq' = `cl_sum'^2 if `cl_tag' & `touse'
-        quietly summarize `cl_sum_sq' if `cl_tag' & `touse'
+        quietly egen byte `cl_tag' = tag(`cluster_var') if `touse'
+        quietly gen double `cl_sum_sq' = `cl_sum'^2 if `cl_tag' == 1 & `touse'
+        quietly summarize `cl_sum_sq' if `cl_tag' == 1 & `touse'
         local se = sqrt(r(sum)) / `sum_wt'
     }
     else {
@@ -235,9 +235,9 @@ program define grf_ate, rclass
             confirm numeric variable `cluster_var'
             tempvar cl_psi cl_tag_t cl_psi_sq
             quietly bysort `cluster_var': egen double `cl_psi' = total(`psi') if `touse'
-            quietly bysort `cluster_var': gen byte `cl_tag_t' = (_n == 1) if `touse'
-            quietly gen double `cl_psi_sq' = `cl_psi'^2 if `cl_tag_t' & `touse'
-            quietly summarize `cl_psi_sq' if `cl_tag_t' & `touse'
+            quietly egen byte `cl_tag_t' = tag(`cluster_var') if `touse'
+            quietly gen double `cl_psi_sq' = `cl_psi'^2 if `cl_tag_t' == 1 & `touse'
+            quietly summarize `cl_psi_sq' if `cl_tag_t' == 1 & `touse'
             local se = sqrt(r(sum)) / `n_use'
         }
         else {
@@ -294,28 +294,28 @@ program define grf_ate, rclass
             tempvar score0 cl_score0 cl_tag0 cl_score0_sq
             quietly gen double `score0' = `ols_resid' * `clever0' if `touse' & `treatvar' == 0
             quietly bysort `cluster_var': egen double `cl_score0' = total(`score0') if `touse' & `treatvar' == 0
-            quietly bysort `cluster_var': gen byte `cl_tag0' = (_n == 1) if `touse' & `treatvar' == 0
-            quietly gen double `cl_score0_sq' = `cl_score0'^2 if `cl_tag0' & `touse' & `treatvar' == 0
-            quietly summarize `cl_score0_sq' if `cl_tag0' & `touse' & `treatvar' == 0
+            quietly egen byte `cl_tag0' = tag(`cluster_var') if `touse' & `treatvar' == 0
+            quietly gen double `cl_score0_sq' = `cl_score0'^2 if `cl_tag0' == 1 & `touse' & `treatvar' == 0
+            quietly summarize `cl_score0_sq' if `cl_tag0' == 1 & `touse' & `treatvar' == 0
             local _sum_cl_score0_sq = r(sum)
-            quietly count if `cl_tag0' & `touse' & `treatvar' == 0
+            quietly count if `cl_tag0' == 1 & `touse' & `treatvar' == 0
             local G0 = r(N)
             local V_eps = (`G0' / (`G0' - 1)) * `_sum_cl_score0_sq' / (`_sum_xx0'^2)
 
             /* Clustered V_treat */
-            tempvar tresid cl_tresid cl_tag1 cl_tresid_sq
+            tempvar tresid cl_tresid cl_tag1 cl_nobs1 cl_tresid_dev cl_tresid_sq
             quietly gen double `tresid' = `depvar' - `yhat1' if `touse' & `treatvar' == 1
             quietly bysort `cluster_var': egen double `cl_tresid' = total(`tresid') if `touse' & `treatvar' == 1
-            quietly bysort `cluster_var': gen byte `cl_tag1' = (_n == 1) if `touse' & `treatvar' == 1
+            quietly bysort `cluster_var': egen long `cl_nobs1' = count(`tresid') if `touse' & `treatvar' == 1
+            quietly egen byte `cl_tag1' = tag(`cluster_var') if `touse' & `treatvar' == 1
             quietly summarize `tresid' if `touse' & `treatvar' == 1
             local tresid_mean = r(mean)
-            tempvar cl_tresid_dev
-            quietly gen double `cl_tresid_dev' = `cl_tresid' - `tresid_mean' if `cl_tag1' & `touse' & `treatvar' == 1
-            quietly gen double `cl_tresid_sq' = `cl_tresid_dev'^2 if `cl_tag1' & `touse' & `treatvar' == 1
-            quietly summarize `cl_tresid_sq' if `cl_tag1' & `touse' & `treatvar' == 1
-            quietly count if `cl_tag1' & `touse' & `treatvar' == 1
+            quietly gen double `cl_tresid_dev' = `cl_tresid' - `cl_nobs1' * `tresid_mean' if `cl_tag1' == 1 & `touse' & `treatvar' == 1
+            quietly gen double `cl_tresid_sq' = `cl_tresid_dev'^2 if `cl_tag1' == 1 & `touse' & `treatvar' == 1
+            quietly summarize `cl_tresid_sq' if `cl_tag1' == 1 & `touse' & `treatvar' == 1
+            quietly count if `cl_tag1' == 1 & `touse' & `treatvar' == 1
             local G1 = r(N)
-            local V_treat = r(sum) / (`G1' * (`G1' - 1))
+            local V_treat = (`G1' / (`G1' - 1)) * r(sum) / (`n1'^2)
 
             local sigma2 = `V_eps' * `new_center'^2 + `V_treat'
             local se = sqrt(`sigma2')
@@ -385,28 +385,28 @@ program define grf_ate, rclass
             tempvar score1 cl_score1 cl_tag1 cl_score1_sq
             quietly gen double `score1' = `ols_resid' * `clever1' if `touse' & `treatvar' == 1
             quietly bysort `cluster_var': egen double `cl_score1' = total(`score1') if `touse' & `treatvar' == 1
-            quietly bysort `cluster_var': gen byte `cl_tag1' = (_n == 1) if `touse' & `treatvar' == 1
-            quietly gen double `cl_score1_sq' = `cl_score1'^2 if `cl_tag1' & `touse' & `treatvar' == 1
-            quietly summarize `cl_score1_sq' if `cl_tag1' & `touse' & `treatvar' == 1
+            quietly egen byte `cl_tag1' = tag(`cluster_var') if `touse' & `treatvar' == 1
+            quietly gen double `cl_score1_sq' = `cl_score1'^2 if `cl_tag1' == 1 & `touse' & `treatvar' == 1
+            quietly summarize `cl_score1_sq' if `cl_tag1' == 1 & `touse' & `treatvar' == 1
             local _sum_cl_score1_sq = r(sum)
-            quietly count if `cl_tag1' & `touse' & `treatvar' == 1
+            quietly count if `cl_tag1' == 1 & `touse' & `treatvar' == 1
             local G1 = r(N)
             local V_eps = (`G1' / (`G1' - 1)) * `_sum_cl_score1_sq' / (`_sum_xx1'^2)
 
             /* Clustered V_ctrl */
-            tempvar cresid cl_cresid cl_tag0 cl_cresid_sq
+            tempvar cresid cl_cresid cl_tag0 cl_nobs0 cl_cresid_dev cl_cresid_sq
             quietly gen double `cresid' = `depvar' - `yhat0' if `touse' & `treatvar' == 0
             quietly bysort `cluster_var': egen double `cl_cresid' = total(`cresid') if `touse' & `treatvar' == 0
-            quietly bysort `cluster_var': gen byte `cl_tag0' = (_n == 1) if `touse' & `treatvar' == 0
+            quietly bysort `cluster_var': egen long `cl_nobs0' = count(`cresid') if `touse' & `treatvar' == 0
+            quietly egen byte `cl_tag0' = tag(`cluster_var') if `touse' & `treatvar' == 0
             quietly summarize `cresid' if `touse' & `treatvar' == 0
             local cresid_mean = r(mean)
-            tempvar cl_cresid_dev
-            quietly gen double `cl_cresid_dev' = `cl_cresid' - `cresid_mean' if `cl_tag0' & `touse' & `treatvar' == 0
-            quietly gen double `cl_cresid_sq' = `cl_cresid_dev'^2 if `cl_tag0' & `touse' & `treatvar' == 0
-            quietly summarize `cl_cresid_sq' if `cl_tag0' & `touse' & `treatvar' == 0
-            quietly count if `cl_tag0' & `touse' & `treatvar' == 0
+            quietly gen double `cl_cresid_dev' = `cl_cresid' - `cl_nobs0' * `cresid_mean' if `cl_tag0' == 1 & `touse' & `treatvar' == 0
+            quietly gen double `cl_cresid_sq' = `cl_cresid_dev'^2 if `cl_tag0' == 1 & `touse' & `treatvar' == 0
+            quietly summarize `cl_cresid_sq' if `cl_tag0' == 1 & `touse' & `treatvar' == 0
+            quietly count if `cl_tag0' == 1 & `touse' & `treatvar' == 0
             local G0 = r(N)
-            local V_ctrl = r(sum) / (`G0' * (`G0' - 1))
+            local V_ctrl = (`G0' / (`G0' - 1)) * r(sum) / (`n0'^2)
 
             local sigma2 = `V_eps' * `new_center'^2 + `V_ctrl'
             local se = sqrt(`sigma2')
