@@ -1,5 +1,4 @@
 * test_options_causal_survival.do -- Comprehensive option tests for grf_causal_survival_forest
-* Tests every option individually and in combination
 
 clear all
 set more off
@@ -25,7 +24,7 @@ capture noisily {
     grf_causal_survival_forest time status treat x1-x5, gen(cs1) ntrees(100) seed(42) mtry(3)
     assert !missing(cs1) in 1
     assert e(mtry) == 3
-    drop cs1 _grf_cs_what
+    drop cs1 _grf_cs_what _grf_cs_yhat _grf_cs_shat _grf_cs_chat _grf_cs_numer _grf_cs_denom
 }
 if _rc {
     display as error "FAIL: mtry(3)"
@@ -40,7 +39,7 @@ capture noisily {
     grf_causal_survival_forest time status treat x1-x5, gen(cs2) ntrees(100) seed(42) minnodesize(20)
     assert !missing(cs2) in 1
     assert e(min_node) == 20
-    drop cs2 _grf_cs_what
+    drop cs2 _grf_cs_what _grf_cs_yhat _grf_cs_shat _grf_cs_chat _grf_cs_numer _grf_cs_denom
 }
 if _rc {
     display as error "FAIL: minnodesize(20)"
@@ -55,7 +54,7 @@ capture noisily {
     grf_causal_survival_forest time status treat x1-x5, gen(cs3) ntrees(100) seed(42) samplefrac(0.7)
     assert !missing(cs3) in 1
     assert reldif(e(sample_fraction), 0.7) < 1e-6
-    drop cs3 _grf_cs_what
+    drop cs3 _grf_cs_what _grf_cs_yhat _grf_cs_shat _grf_cs_chat _grf_cs_numer _grf_cs_denom
 }
 if _rc {
     display as error "FAIL: samplefrac(0.7)"
@@ -70,7 +69,7 @@ capture noisily {
     grf_causal_survival_forest time status treat x1-x5, gen(cs4) ntrees(100) seed(42) nohonesty
     assert !missing(cs4) in 1
     assert e(honesty) == 0
-    drop cs4 _grf_cs_what
+    drop cs4 _grf_cs_what _grf_cs_yhat _grf_cs_shat _grf_cs_chat _grf_cs_numer _grf_cs_denom
 }
 if _rc {
     display as error "FAIL: nohonesty"
@@ -85,7 +84,7 @@ capture noisily {
     grf_causal_survival_forest time status treat x1-x5, gen(cs5) ntrees(100) seed(42) honestyfrac(0.7)
     assert !missing(cs5) in 1
     assert reldif(e(honesty_fraction), 0.7) < 1e-6
-    drop cs5 _grf_cs_what
+    drop cs5 _grf_cs_what _grf_cs_yhat _grf_cs_shat _grf_cs_chat _grf_cs_numer _grf_cs_denom
 }
 if _rc {
     display as error "FAIL: honestyfrac(0.7)"
@@ -100,7 +99,7 @@ capture noisily {
     grf_causal_survival_forest time status treat x1-x5, gen(cs6) ntrees(100) seed(42) nohonestyprune
     assert !missing(cs6) in 1
     assert e(honesty_prune) == 0
-    drop cs6 _grf_cs_what
+    drop cs6 _grf_cs_what _grf_cs_yhat _grf_cs_shat _grf_cs_chat _grf_cs_numer _grf_cs_denom
 }
 if _rc {
     display as error "FAIL: nohonestyprune"
@@ -115,7 +114,7 @@ capture noisily {
     grf_causal_survival_forest time status treat x1-x5, gen(cs7) ntrees(100) seed(42) alpha(0.1)
     assert !missing(cs7) in 1
     assert reldif(e(alpha), 0.1) < 1e-6
-    drop cs7 _grf_cs_what
+    drop cs7 _grf_cs_what _grf_cs_yhat _grf_cs_shat _grf_cs_chat _grf_cs_numer _grf_cs_denom
 }
 if _rc {
     display as error "FAIL: alpha(0.1)"
@@ -130,7 +129,7 @@ capture noisily {
     grf_causal_survival_forest time status treat x1-x5, gen(cs8) ntrees(100) seed(42) imbalancepenalty(0.5)
     assert !missing(cs8) in 1
     assert reldif(e(imbalance_penalty), 0.5) < 1e-6
-    drop cs8 _grf_cs_what
+    drop cs8 _grf_cs_what _grf_cs_yhat _grf_cs_shat _grf_cs_chat _grf_cs_numer _grf_cs_denom
 }
 if _rc {
     display as error "FAIL: imbalancepenalty(0.5)"
@@ -145,7 +144,7 @@ capture noisily {
     grf_causal_survival_forest time status treat x1-x5, gen(cs9) ntrees(100) seed(42) cigroupsize(2) samplefrac(0.4)
     assert !missing(cs9) in 1
     assert e(ci_group_size) == 2
-    drop cs9 _grf_cs_what
+    drop cs9 _grf_cs_what _grf_cs_yhat _grf_cs_shat _grf_cs_chat _grf_cs_numer _grf_cs_denom
 }
 if _rc {
     display as error "FAIL: cigroupsize(2)"
@@ -159,7 +158,7 @@ else {
 capture noisily {
     grf_causal_survival_forest time status treat x1-x5, gen(cs10) ntrees(100) seed(42) numthreads(2)
     assert !missing(cs10) in 1
-    drop cs10 _grf_cs_what
+    drop cs10 _grf_cs_what _grf_cs_yhat _grf_cs_shat _grf_cs_chat _grf_cs_numer _grf_cs_denom
 }
 if _rc {
     display as error "FAIL: numthreads(2)"
@@ -174,7 +173,7 @@ capture noisily {
     grf_causal_survival_forest time status treat x1-x5, gen(cs11) ntrees(100) seed(42) target(1)
     assert !missing(cs11) in 1
     assert e(target) == 1
-    drop cs11 _grf_cs_what
+    drop cs11 _grf_cs_what _grf_cs_yhat _grf_cs_shat _grf_cs_chat _grf_cs_numer _grf_cs_denom
 }
 if _rc {
     display as error "FAIL: target(1) RMST"
@@ -189,7 +188,7 @@ capture noisily {
     grf_causal_survival_forest time status treat x1-x5, gen(cs12) ntrees(100) seed(42) target(2)
     assert !missing(cs12) in 1
     assert e(target) == 2
-    drop cs12 _grf_cs_what
+    drop cs12 _grf_cs_what _grf_cs_yhat _grf_cs_shat _grf_cs_chat _grf_cs_numer _grf_cs_denom
 }
 if _rc {
     display as error "FAIL: target(2) survival probability"
@@ -206,7 +205,7 @@ capture noisily {
     assert !missing(cs13_var) in 1
     assert cs13_var[1] > 0
     assert "`e(variance_var)'" == "cs13_var"
-    drop cs13 cs13_var _grf_cs_what
+    drop cs13 cs13_var _grf_cs_what _grf_cs_yhat _grf_cs_shat _grf_cs_chat _grf_cs_numer _grf_cs_denom
 }
 if _rc {
     display as error "FAIL: estimatevariance"
@@ -223,7 +222,7 @@ capture noisily {
     assert !missing(cs14) in 1
     assert !missing(csvar14) in 1
     assert "`e(variance_var)'" == "csvar14"
-    drop cs14 csvar14 _grf_cs_what
+    drop cs14 csvar14 _grf_cs_what _grf_cs_yhat _grf_cs_shat _grf_cs_chat _grf_cs_numer _grf_cs_denom
 }
 if _rc {
     display as error "FAIL: estimatevariance + vargenerate"
@@ -238,7 +237,7 @@ capture noisily {
     grf_causal_survival_forest time status treat x1-x5, gen(cs15) ntrees(100) seed(42) nostabilizesplits
     assert !missing(cs15) in 1
     assert e(stabilize) == 0
-    drop cs15 _grf_cs_what
+    drop cs15 _grf_cs_what _grf_cs_yhat _grf_cs_shat _grf_cs_chat _grf_cs_numer _grf_cs_denom
 }
 if _rc {
     display as error "FAIL: nostabilizesplits"
@@ -253,7 +252,7 @@ capture noisily {
     grf_causal_survival_forest time status treat x1-x5, gen(cs16) ntrees(100) seed(42) horizon(5)
     assert !missing(cs16) in 1
     assert reldif(e(horizon), 5) < 1e-6
-    drop cs16 _grf_cs_what
+    drop cs16 _grf_cs_what _grf_cs_yhat _grf_cs_shat _grf_cs_chat _grf_cs_numer _grf_cs_denom
 }
 if _rc {
     display as error "FAIL: horizon(5)"
@@ -269,7 +268,7 @@ capture noisily {
     quietly count if x1 > 0
     local n_sub = r(N)
     assert e(N) == `n_sub'
-    drop cs17 _grf_cs_what
+    drop cs17 _grf_cs_what _grf_cs_yhat _grf_cs_shat _grf_cs_chat _grf_cs_numer _grf_cs_denom
 }
 if _rc {
     display as error "FAIL: if restriction"
@@ -284,7 +283,7 @@ capture noisily {
     grf_causal_survival_forest time status treat x1-x5, gen(cs18) ntrees(100) seed(42)
     grf_causal_survival_forest time status treat x1-x5, gen(cs18) ntrees(100) seed(42) replace
     assert !missing(cs18) in 1
-    drop cs18 _grf_cs_what
+    drop cs18 _grf_cs_what _grf_cs_yhat _grf_cs_shat _grf_cs_chat _grf_cs_numer _grf_cs_denom
 }
 if _rc {
     display as error "FAIL: replace"
@@ -294,7 +293,7 @@ else {
     display as result "PASS: replace"
 }
 
-* ---- Test 19: All non-default options combined ----
+* ---- Test 19: all major non-default options combined ----
 capture noisily {
     grf_causal_survival_forest time status treat x1-x5, gen(cs19) ntrees(100) seed(123) ///
         mtry(3) minnodesize(20) samplefrac(0.4) honestyfrac(0.7)                        ///
@@ -314,7 +313,7 @@ capture noisily {
     assert e(stabilize) == 0
     assert e(target) == 2
     assert reldif(e(horizon), 5) < 1e-6
-    drop cs19 csvar19 _grf_cs_what
+    drop cs19 csvar19 _grf_cs_what _grf_cs_yhat _grf_cs_shat _grf_cs_chat _grf_cs_numer _grf_cs_denom
 }
 if _rc {
     display as error "FAIL: all non-default options combined"
@@ -324,7 +323,7 @@ else {
     display as result "PASS: all non-default options combined"
 }
 
-* ---- Test 20: Verify default e() values ----
+* ---- Test 20: default e() values and nuisance pointers ----
 capture noisily {
     grf_causal_survival_forest time status treat x1-x5, gen(cs20) ntrees(100) seed(42)
     assert e(honesty) == 1
@@ -343,7 +342,14 @@ capture noisily {
     assert "`e(timevar)'" == "time"
     assert "`e(statusvar)'" == "status"
     assert "`e(treatvar)'" == "treat"
-    drop cs20 _grf_cs_what
+    assert "`e(what_var)'" == "_grf_cs_what"
+    assert "`e(yhat_var)'" == "_grf_cs_yhat"
+    assert "`e(shat_var)'" == "_grf_cs_shat"
+    assert "`e(chat_var)'" == "_grf_cs_chat"
+    assert "`e(numer_var)'" == "_grf_cs_numer"
+    assert "`e(denom_var)'" == "_grf_cs_denom"
+    assert "`e(nuisance_mode)'" == "auto"
+    drop cs20 _grf_cs_what _grf_cs_yhat _grf_cs_shat _grf_cs_chat _grf_cs_numer _grf_cs_denom
 }
 if _rc {
     display as error "FAIL: default e() values"
@@ -353,62 +359,115 @@ else {
     display as result "PASS: default e() values"
 }
 
-* ---- Test 21: user-supplied nuisance hooks (whatinput/yhatinput/chatinput) ----
+* ---- Test 21: full-input nuisance mode requires full set and runs ----
 capture noisily {
     gen double what_in = min(max(0.5 + 0.2*x1, 0.01), 0.99)
     gen double yhat_in = min(time, 4)
-    gen double chat_in = 0.8
+    gen double shat_in = min(max((time > 4) * 0.9 + 0.05, 0.01), 0.99)
+    gen double chat_in = min(max(0.8 + 0.1*x2, 0.05), 0.99)
 
     grf_causal_survival_forest time status treat x1-x5, gen(cs21) ntrees(100) seed(42) ///
-        horizon(4) whatinput(what_in) yhatinput(yhat_in) chatinput(chat_in)
+        horizon(4) whatinput(what_in) yhatinput(yhat_in) shatinput(shat_in) chatinput(chat_in)
 
     assert !missing(cs21) in 1
-    assert "`e(what_var)'" == "_grf_cs_what"
-    assert "`e(yhat_var)'" == "_grf_cs_yhat"
-    assert "`e(chat_var)'" == "_grf_cs_chat"
-    assert "`e(numer_var)'" == "_grf_cs_numer"
-    assert "`e(denom_var)'" == "_grf_cs_denom"
-    assert "`e(nuisance_mode)'" == "estimated_ipcw"
+    assert "`e(nuisance_mode)'" == "full_input"
+    assert !missing(_grf_cs_what) in 1
     assert !missing(_grf_cs_yhat) in 1
+    assert !missing(_grf_cs_shat) in 1
     assert !missing(_grf_cs_chat) in 1
 
-    drop cs21 what_in yhat_in chat_in ///
-        _grf_cs_what _grf_cs_numer _grf_cs_denom _grf_cs_yhat _grf_cs_chat
+    drop cs21 what_in yhat_in shat_in chat_in ///
+        _grf_cs_what _grf_cs_yhat _grf_cs_shat _grf_cs_chat _grf_cs_numer _grf_cs_denom
 }
 if _rc {
-    display as error "FAIL: user-supplied nuisance hooks"
+    display as error "FAIL: full-input nuisance mode"
     local errors = `errors' + 1
 }
 else {
-    display as result "PASS: user-supplied nuisance hooks"
+    display as result "PASS: full-input nuisance mode"
 }
 
-* ---- Test 22: precomputed numer/denom mode with explicit nuisance ----
+* ---- Test 22: moment-input numer()/denom() mode ----
 capture noisily {
-    gen double what_pre = min(max(0.5 + 0.2*x2, 0.01), 0.99)
-    gen double numer_pre = (treat - what_pre) * status * min(time, 3)
-    gen double denom_pre = (treat - what_pre)^2 + 1e-4
+    gen double numer_pre = (treat - 0.5) * status * min(time, 3)
+    gen double denom_pre = (treat - 0.5)^2 + 1e-4
 
     grf_causal_survival_forest time status treat x1-x5, gen(cs22) ntrees(100) seed(42) ///
-        horizon(3) numer(numer_pre) denom(denom_pre) whatinput(what_pre)
+        horizon(3) numer(numer_pre) denom(denom_pre)
 
     assert !missing(cs22) in 1
-    assert "`e(nuisance_mode)'" == "precomputed_numer_denom"
-    assert "`e(numer_var)'" == "_grf_cs_numer"
-    assert "`e(denom_var)'" == "_grf_cs_denom"
+    assert "`e(nuisance_mode)'" == "moment_input"
     assert !missing(_grf_cs_numer) in 1
     assert !missing(_grf_cs_denom) in 1
 
-    drop cs22 what_pre numer_pre denom_pre ///
-        _grf_cs_what _grf_cs_numer _grf_cs_denom
-    capture drop _grf_cs_yhat _grf_cs_chat
+    drop cs22 numer_pre denom_pre ///
+        _grf_cs_what _grf_cs_yhat _grf_cs_shat _grf_cs_chat _grf_cs_numer _grf_cs_denom
 }
 if _rc {
-    display as error "FAIL: precomputed numer/denom mode"
+    display as error "FAIL: moment-input numer()/denom() mode"
     local errors = `errors' + 1
 }
 else {
-    display as result "PASS: precomputed numer/denom mode"
+    display as result "PASS: moment-input numer()/denom() mode"
+}
+
+* ---- Test 23: partial nuisance input should fail ----
+capture noisily {
+    gen double what_only = min(max(0.5 + 0.2*x1, 0.01), 0.99)
+    capture grf_causal_survival_forest time status treat x1-x5, gen(cs23) ntrees(100) seed(42) whatinput(what_only)
+    assert _rc != 0
+    drop what_only
+}
+if _rc {
+    display as error "FAIL: partial nuisance input rejection"
+    local errors = `errors' + 1
+}
+else {
+    display as result "PASS: partial nuisance input rejection"
+}
+
+* ---- Test 24: numer()/denom() cannot combine with nuisance input ----
+capture noisily {
+    gen double numer_conflict = (treat - 0.5) * status
+    gen double denom_conflict = (treat - 0.5)^2 + 1e-4
+    gen double what_conflict = min(max(0.5 + 0.1*x1, 0.01), 0.99)
+    capture grf_causal_survival_forest time status treat x1-x5, gen(cs24) ntrees(100) seed(42) ///
+        numer(numer_conflict) denom(denom_conflict) whatinput(what_conflict)
+    assert _rc != 0
+    drop numer_conflict denom_conflict what_conflict
+}
+if _rc {
+    display as error "FAIL: numer()/denom() conflict rejection"
+    local errors = `errors' + 1
+}
+else {
+    display as result "PASS: numer()/denom() conflict rejection"
+}
+
+* ---- Test 25: nuisance generate outputs ----
+capture noisily {
+    grf_causal_survival_forest time status treat x1-x5, gen(cs25) ntrees(100) seed(42) ///
+        whatgenerate(what_out) yhatgenerate(yhat_out) shatgenerate(shat_out) chatgenerate(chat_out)
+
+    assert !missing(cs25) in 1
+    assert !missing(what_out) in 1
+    assert !missing(yhat_out) in 1
+    assert !missing(shat_out) in 1
+    assert !missing(chat_out) in 1
+    assert "`e(what_generate)'" == "what_out"
+    assert "`e(yhat_generate)'" == "yhat_out"
+    assert "`e(shat_generate)'" == "shat_out"
+    assert "`e(chat_generate)'" == "chat_out"
+
+    drop cs25 what_out yhat_out shat_out chat_out ///
+        _grf_cs_what _grf_cs_yhat _grf_cs_shat _grf_cs_chat _grf_cs_numer _grf_cs_denom
+}
+if _rc {
+    display as error "FAIL: nuisance generate outputs"
+    local errors = `errors' + 1
+}
+else {
+    display as result "PASS: nuisance generate outputs"
 }
 
 * ============================================================

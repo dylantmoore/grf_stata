@@ -146,9 +146,8 @@ as a standalone command.{p_end}
 
 {phang}{bf:Causal survival DR scores.}
 {cmd:grf_get_scores} after {cmd:grf_causal_survival_forest} returns
-IPCW/DR scores based on stored nuisance moments. Exact parity may still differ
-for advanced workflows that require upstream internals not exposed through the
-plugin interface.{p_end}
+DR scores using {cmd:tau + psi / V.hat}, where {cmd:psi = numer - denom * tau},
+with nuisance moments stored by the causal-survival wrapper.{p_end}
 
 {phang}{bf:Package-level options API.}
 R's {cmd:grf_options()} is not mirrored; Stata intentionally uses
@@ -161,7 +160,14 @@ always materialize prediction output columns by command design.{p_end}
 {phang}{bf:Upstream-constrained options.}
 Some R options (for example {cmd:orthog.boosting} and enum-style
 {cmd:honesty.prune.method}) are not exposed under the current vendored
-core API.{p_end}
+core API. This is machine-checked against
+{cmd:reviews/r_api_manifest.json} generated from pinned upstream docs/source.{p_end}
+
+{phang}{bf:Advanced introspection parity.}
+Model-level and proxy introspection commands are available (for example
+{cmd:grf_forest_summary}, {cmd:grf_get_tree}, {cmd:grf_get_forest_weights}),
+but exact full-object internals are not fully mirrored. See
+{cmd:reviews/introspection_discrepancies.md}.{p_end}
 
 {marker references}{...}
 {title:References}

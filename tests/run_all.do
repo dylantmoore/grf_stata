@@ -24,6 +24,7 @@ else {
 }
 
 local test_files ///
+    "`test_prefix'test_parity_scope.do" ///
     "`test_prefix'test_generate_data.do" ///
     "`test_prefix'test_seed_reproducibility.do" ///
     "`test_prefix'test_model_id.do" ///

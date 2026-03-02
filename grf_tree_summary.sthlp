@@ -12,3 +12,7 @@ Syntax:
 
 {pstd}
 Stores {cmd:r(tree)}, {cmd:r(n_trees)}, and {cmd:r(forest_type)}.
+
+{pstd}
+This is a metadata summary. Exact node-level tree internals are not currently
+persisted through the plugin boundary.

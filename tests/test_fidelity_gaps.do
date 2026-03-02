@@ -401,7 +401,7 @@ else {
     display as result "PASS: E3.5 lm_forest nuisance inputs"
 }
 
-* ---- E3.6: causal_survival_forest with whatinput ----
+* ---- E3.6: causal_survival_forest full nuisance-input mode ----
 capture noisily {
     clear
     set obs 300
@@ -414,23 +414,33 @@ capture noisily {
     gen time = min(t, c)
     gen status = (t <= c)
 
-    * Step 1: Compute propensity score externally
+    * Step 1: Build full nuisance inputs externally
     quietly logit w x1 x2
     quietly predict my_what_cs, pr
+    quietly summarize time if status == 1, detail
+    local h = r(p50)
+    gen my_yhat_cs = min(time, `h')
+    gen my_shat_cs = (time > `h')
+    quietly logit status x1 x2
+    quietly predict my_chat_cs, pr
 
-    * Step 2: Fit with user-supplied propensity
+    * Step 2: Fit with full user-supplied nuisance set
     grf_causal_survival_forest time status w x1 x2, gen(csf_n1) ///
-        ntrees(100) seed(42) whatinput(my_what_cs)
+        ntrees(100) seed(42) horizon(`h') ///
+        whatinput(my_what_cs) yhatinput(my_yhat_cs) ///
+        shatinput(my_shat_cs) chatinput(my_chat_cs)
     assert !missing(csf_n1) in 1
+    assert "`e(nuisance_mode)'" == "full_input"
 
-    drop csf_n1 my_what_cs
+    drop csf_n1 my_what_cs my_yhat_cs my_shat_cs my_chat_cs ///
+        _grf_cs_what _grf_cs_yhat _grf_cs_shat _grf_cs_chat _grf_cs_numer _grf_cs_denom
 }
 if _rc {
-    display as error "FAIL: E3.6 causal_survival_forest whatinput"
+    display as error "FAIL: E3.6 causal_survival_forest full nuisance inputs"
     local errors = `errors' + 1
 }
 else {
-    display as result "PASS: E3.6 causal_survival_forest whatinput"
+    display as result "PASS: E3.6 causal_survival_forest full nuisance inputs"
 }
 
 

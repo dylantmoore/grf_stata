@@ -999,6 +999,57 @@ else {
 capture restore
 
 * ============================================================
+* 23b. Causal survival DR scores (correlation > 0.90)
+capture restore
+
+* ============================================================
+capture confirm file "ref/causal_survival_scores.csv"
+if _rc {
+    display as text "SKIP: causal survival DR scores (ref file missing)"
+}
+else {
+    capture noisily {
+        import delimited using "ref/causal_survival_input.csv", clear
+
+        preserve
+        import delimited using "ref/causal_survival_horizon.csv", clear
+        local cs_horizon = horizon[1]
+        restore
+
+        grf_causal_survival_forest time status w x1-x5, gen(cspred_stata) ///
+            ntrees(2000) seed(42) minnodesize(15) horizon(`cs_horizon')
+        grf_get_scores, gen(csscore_stata)
+
+        preserve
+        import delimited using "ref/causal_survival_scores.csv", clear
+        rename score score_r
+        tempfile r_csscores
+        save `r_csscores'
+        restore
+
+        merge 1:1 _n using `r_csscores', nogenerate
+        correlate csscore_stata score_r
+        assert r(rho) > 0.90
+
+        * Internal formula consistency: score = tau + psi / Vhat
+        gen double cs_vhat = max(_grf_cs_what * (1 - _grf_cs_what), 1e-12)
+        gen double cs_formula = cspred_stata + (_grf_cs_numer - _grf_cs_denom * cspred_stata) / cs_vhat
+        gen double cs_diff = abs(csscore_stata - cs_formula)
+        quietly summarize cs_diff, meanonly
+        assert r(max) < 1e-10
+    }
+    if _rc {
+        display as error "FAIL: causal survival DR scores"
+        local errors = `errors' + 1
+    }
+    else {
+        display as result "PASS: causal survival DR scores"
+    }
+}
+
+capture restore
+
+* ============================================================
 * 24. Boosted regression forest predictions (correlation > 0.90)
 capture restore
 

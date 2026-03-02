@@ -24,11 +24,13 @@ assert !missing(e(model_id))
 
 * ---- Test 1: forest summary ----
 capture noisily {
-    grf_forest_summary
+    grf_forest_summary, all
     assert "`r(forest_type)'" == "regression"
     assert r(N) == 400
     assert r(n_trees) == 200
     assert r(model_id) == e(model_id)
+    assert strpos("`r(e_scalars)'", "N") > 0
+    assert strpos("`r(e_macros)'", "forest_type") > 0
 }
 if _rc {
     display as error "FAIL: grf_forest_summary"
@@ -78,7 +80,22 @@ capture noisily {
     quietly summarize fw_proxy
     assert r(N) > 0
     assert abs(r(sum) - 1) < 1e-8
-    drop fw_proxy
+    assert r(Var) > 0
+
+    grf_get_forest_weights, obs(10) gen(fw_proxy_x) scale(0.5) ///
+        xvars(x1 x2 x3) predweight(0.5) xscale(1.0)
+    assert r(uses_xvars) == 1
+    assert reldif(r(predweight), 0.5) < 1e-8
+    quietly summarize fw_proxy_x
+    assert r(N) > 0
+    assert abs(r(sum) - 1) < 1e-8
+    assert r(Var) > 0
+
+    gen double fw_diff = fw_proxy - fw_proxy_x
+    quietly summarize fw_diff
+    assert r(sd) > 0
+
+    drop fw_proxy fw_proxy_x fw_diff
 }
 if _rc {
     display as error "FAIL: grf_get_forest_weights"

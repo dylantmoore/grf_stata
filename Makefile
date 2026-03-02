@@ -13,6 +13,8 @@ GRF_CORE   = $(VENDOR_GRF)/src
 GRF_3RDPTY = $(VENDOR_GRF)/third_party
 
 INCLUDES = -I$(GRF_CORE) -I$(GRF_3RDPTY) -I. -Wno-deprecated-declarations
+PARITY_TAG ?= v2.5.0
+PARITY_MANIFEST = reviews/r_api_manifest.json
 
 # All grf C++ source files
 GRF_SRCS = \
@@ -105,7 +107,7 @@ LINUX_CFLAGS   = -O3 -fPIC -DSYSTEM=OPUNIX -I.
 LINUX_LDFLAGS  = -shared -static-libstdc++ -static-libgcc -lpthread
 
 # ── Phony targets ─────────────────────────────────────────────────
-.PHONY: all macosx linux windows all-platforms clean
+.PHONY: all macosx linux windows all-platforms parity-manifest parity-scope-check clean
 
 # Default: build for local platform only
 all: macosx
@@ -114,6 +116,19 @@ macosx: $(TARGET_DARWIN_ARM64)
 linux: $(TARGET_LINUX)
 windows: $(TARGET_WINDOWS)
 all-platforms: macosx linux windows
+parity-manifest:
+	Rscript tools/extract_r_api_manifest.R --tag $(PARITY_TAG) --out $(PARITY_MANIFEST)
+
+parity-scope-check:
+	@tmp=$$(mktemp); \
+	tmp_norm=$$(mktemp); \
+	manifest_norm=$$(mktemp); \
+	Rscript tools/extract_r_api_manifest.R --tag $(PARITY_TAG) --out $$tmp >/dev/null; \
+	grep -v '"generated_at_utc"' $$tmp > $$tmp_norm; \
+	grep -v '"generated_at_utc"' $(PARITY_MANIFEST) > $$manifest_norm; \
+	diff -u $$manifest_norm $$tmp_norm; \
+	Rscript tools/check_parity_scope.R $(PARITY_MANIFEST); \
+	rm -f $$tmp $$tmp_norm $$manifest_norm
 
 # ── Build rules ───────────────────────────────────────────────────
 

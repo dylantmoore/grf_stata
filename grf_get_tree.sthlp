@@ -11,3 +11,6 @@ Syntax:
 
 {pstd}
 Stores the same {cmd:r()} results as {cmd:grf_tree_summary}.
+
+{pstd}
+Current output is metadata-level, not full node-by-node tree extraction.

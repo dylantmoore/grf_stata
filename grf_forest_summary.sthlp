@@ -1,5 +1,5 @@
 {smcl}
-{* *! version 0.1.0}{...}
+{* *! version 0.2.0}{...}
 {title:grf_forest_summary}
 
 {pstd}
@@ -9,4 +9,8 @@ and stores key fields in {cmd:r()} ({cmd:cmd}, {cmd:forest_type}, {cmd:N},
 
 {pstd}
 Syntax:
-{cmd:grf_forest_summary}
+{cmd:grf_forest_summary} [{cmd:,} {opt all}]
+
+{pstd}
+With {cmd:all}, the command also lists all stored {cmd:e()} scalar and macro
+names and returns them as {cmd:r(e_scalars)} and {cmd:r(e_macros)}.

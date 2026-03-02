@@ -1,8 +1,10 @@
 *! grf_forest_summary.ado -- Print summary metadata for latest GRF model
-*! Version 0.1.0
+*! Version 0.2.0
 
 program define grf_forest_summary, rclass
     version 14.0
+
+    syntax [, ALL]
 
     if "`e(forest_type)'" == "" {
         di as error "grf_forest_summary requires a prior grf_* estimation command"
@@ -30,6 +32,9 @@ program define grf_forest_summary, rclass
     capture local model_id = e(model_id)
     if _rc local model_id = .
 
+    local escalars : e(scalars)
+    local emacros : e(macros)
+
     di as text ""
     di as text "GRF Forest Summary"
     di as text "{hline 55}"
@@ -41,10 +46,20 @@ program define grf_forest_summary, rclass
     if !missing(`seed') di as text "Seed:                 " as result `seed'
     if "`depvar'" != "" di as text "Outcome variable:     " as result "`depvar'"
     if "`indepvars'" != "" di as text "Predictors:           " as result "`indepvars'"
+    if "`all'" != "" {
+        di as text "{hline 55}"
+        di as text "Stored e() scalars:   " as result cond("`escalars'" == "", "(none)", "`escalars'")
+        foreach s of local escalars {
+            capture noisily di as text "  e(`s') = " as result %12.6g e(`s')
+        }
+        di as text "Stored e() macros:    " as result cond("`emacros'" == "", "(none)", "`emacros'")
+    }
     di as text "{hline 55}"
 
     return local cmd "`cmd'"
     return local forest_type "`forest_type'"
+    return local e_scalars "`escalars'"
+    return local e_macros "`emacros'"
     if "`depvar'" != "" return local depvar "`depvar'"
     if "`indepvars'" != "" return local indepvars "`indepvars'"
     if !missing(`model_id') return scalar model_id = `model_id'

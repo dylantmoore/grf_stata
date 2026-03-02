@@ -1,0 +1,102 @@
+{
+  "schema_version": 1,
+  "generated_at_utc": "2026-03-02T19:19:46Z",
+  "source": {
+    "repository": "grf-labs/grf",
+    "release_tag": "v2.5.0",
+    "extraction_mode": "raw_github_docs_and_source",
+    "files": [
+      {
+        "path": "man/causal_forest.Rd",
+        "url": "https://raw.githubusercontent.com/grf-labs/grf/v2.5.0/r-package/grf/man/causal_forest.Rd"
+      },
+      {
+        "path": "man/causal_survival_forest.Rd",
+        "url": "https://raw.githubusercontent.com/grf-labs/grf/v2.5.0/r-package/grf/man/causal_survival_forest.Rd"
+      },
+      {
+        "path": "man/survival_forest.Rd",
+        "url": "https://raw.githubusercontent.com/grf-labs/grf/v2.5.0/r-package/grf/man/survival_forest.Rd"
+      },
+      {
+        "path": "man/grf_options.Rd",
+        "url": "https://raw.githubusercontent.com/grf-labs/grf/v2.5.0/r-package/grf/man/grf_options.Rd"
+      },
+      {
+        "path": "man/plot.rank_average_treatment_effect.Rd",
+        "url": "https://raw.githubusercontent.com/grf-labs/grf/v2.5.0/r-package/grf/man/plot.rank_average_treatment_effect.Rd"
+      },
+      {
+        "path": "R/get_scores.R",
+        "url": "https://raw.githubusercontent.com/grf-labs/grf/v2.5.0/r-package/grf/R/get_scores.R"
+      }
+    ]
+  },
+  "options": {
+    "orthog.boosting": {
+      "present": false,
+      "checked_in": ["man/causal_forest.Rd", "man/causal_survival_forest.Rd"]
+    },
+    "honesty.prune.method": {
+      "present": false,
+      "checked_in": ["man/causal_forest.Rd", "man/causal_survival_forest.Rd", "man/survival_forest.Rd"]
+    },
+    "compute.oob.predictions": {
+      "present": true,
+      "checked_in": ["man/causal_forest.Rd", "man/causal_survival_forest.Rd"]
+    },
+    "causal_survival.W.hat": {
+      "present": true,
+      "checked_in": "man/causal_survival_forest.Rd"
+    },
+    "causal_survival.Y.hat": {
+      "present": false,
+      "checked_in": "man/causal_survival_forest.Rd"
+    },
+    "causal_survival.S.hat": {
+      "present": false,
+      "checked_in": "man/causal_survival_forest.Rd"
+    },
+    "causal_survival.C.hat": {
+      "present": false,
+      "checked_in": "man/causal_survival_forest.Rd"
+    },
+    "causal_survival.failure.times": {
+      "present": true,
+      "checked_in": "man/causal_survival_forest.Rd"
+    }
+  },
+  "functions": {
+    "get_scores.causal_survival_forest": {
+      "present": true,
+      "checked_in": "R/get_scores.R"
+    },
+    "plot.rank_average_treatment_effect": {
+      "present": true,
+      "checked_in": "man/plot.rank_average_treatment_effect.Rd"
+    },
+    "grf_options": {
+      "present": true,
+      "checked_in": "man/grf_options.Rd"
+    }
+  },
+  "gap_scope": {
+    "gap4_orthog_boosting": {
+      "option": "orthog.boosting",
+      "in_current_upstream_api": false,
+      "resolution": "non_applicable_in_current_upstream"
+    },
+    "gap5_honesty_prune_method": {
+      "option": "honesty.prune.method",
+      "in_current_upstream_api": false,
+      "resolution": "non_applicable_in_current_upstream"
+    },
+    "gap6_causal_survival_nuisance_inputs": {
+      "target_function": "causal_survival_forest",
+      "W_hat_supported": true,
+      "Y_hat_supported": false,
+      "S_hat_supported": false,
+      "C_hat_supported": false
+    }
+  }
+}

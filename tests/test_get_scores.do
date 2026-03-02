@@ -205,18 +205,23 @@ capture noisily {
 
     assert "`e(numer_var)'" == "_grf_cs_numer"
     assert "`e(denom_var)'" == "_grf_cs_denom"
+    assert "`e(what_var)'" == "_grf_cs_what"
 
     grf_get_scores, gen(cs_scores)
     assert !missing(r(denom_mean))
+    assert !missing(r(vhat_mean))
+    assert "`r(vhat_source)'" == "W.hat * (1 - W.hat)"
     assert r(sd) > 0
 
-    * Score path should include IPCW correction, not just raw tau.
-    gen double cs_abs_diff = abs(cs_scores - cs_tau)
-    quietly summarize cs_abs_diff
-    assert r(max) > 1e-10
+    * Formula check against upstream-style tau + psi / V.hat for binary treatment.
+    gen double cs_vhat = max(_grf_cs_what * (1 - _grf_cs_what), 1e-12)
+    gen double cs_formula = cs_tau + (_grf_cs_numer - _grf_cs_denom * cs_tau) / cs_vhat
+    gen double cs_abs_diff = abs(cs_scores - cs_formula)
+    quietly summarize cs_abs_diff, meanonly
+    assert r(max) < 1e-10
 
-    drop w_cs time_cs status_cs cs_tau cs_scores cs_abs_diff
-    capture drop _grf_cs_what _grf_cs_numer _grf_cs_denom _grf_cs_yhat _grf_cs_chat
+    drop w_cs time_cs status_cs cs_tau cs_scores cs_vhat cs_formula cs_abs_diff
+    capture drop _grf_cs_what _grf_cs_numer _grf_cs_denom _grf_cs_yhat _grf_cs_shat _grf_cs_chat
 }
 if _rc {
     display as error "FAIL: grf_get_scores causal survival forest"

@@ -1,11 +1,11 @@
 {smcl}
-{* *! version 0.2.0}{...}
+{* *! version 0.3.0}{...}
 {viewerjumpto "Syntax" "grf_causal_survival_forest##syntax"}{...}
 {viewerjumpto "Description" "grf_causal_survival_forest##description"}{...}
+{viewerjumpto "Nuisance modes" "grf_causal_survival_forest##modes"}{...}
 {viewerjumpto "Options" "grf_causal_survival_forest##options"}{...}
 {viewerjumpto "Examples" "grf_causal_survival_forest##examples"}{...}
 {viewerjumpto "Stored results" "grf_causal_survival_forest##results"}{...}
-{viewerjumpto "References" "grf_causal_survival_forest##references"}{...}
 
 {title:Title}
 
@@ -22,12 +22,12 @@
 {opt gen:erate(newvar)}
 [{it:options}]
 
-{synoptset 32 tabbed}{...}
+{synoptset 34 tabbed}{...}
 {synopthdr}
 {synoptline}
 {syntab:Main}
 {synopt:{opt gen:erate(newvar)}}name for CATE predictions{p_end}
-{synopt:{opt replace}}overwrite existing output variable{p_end}
+{synopt:{opt replace}}overwrite existing generated variables{p_end}
 
 {syntab:Forest}
 {synopt:{opt ntrees(#)}}number of trees; default {cmd:2000}{p_end}
@@ -46,11 +46,20 @@
 {synopt:{opt horizon(#)}}horizon for RMST/survival-probability estimand (0 = median event time){p_end}
 {synopt:{opt target(#)}}estimand target: {cmd:1}=RMST (default), {cmd:2}=survival probability{p_end}
 {synopt:{opt nostabilizesplits}}disable split stabilization{p_end}
-{synopt:{opt numer(varname)}}precomputed IPCW numerator column{p_end}
-{synopt:{opt denom(varname)}}precomputed IPCW denominator column{p_end}
+
+{syntab:Nuisance inputs (full-input mode)}
 {synopt:{opt whatinput(varname)}}user-supplied propensity nuisance {it:W.hat}{p_end}
 {synopt:{opt yhatinput(varname)}}user-supplied outcome nuisance {it:Y.hat}{p_end}
+{synopt:{opt shatinput(varname)}}user-supplied survival nuisance {it:S.hat}{p_end}
 {synopt:{opt chatinput(varname)}}user-supplied censoring nuisance {it:C.hat}{p_end}
+{synopt:{opt numer(varname)}}expert moment override numerator{p_end}
+{synopt:{opt denom(varname)}}expert moment override denominator{p_end}
+
+{syntab:Nuisance outputs}
+{synopt:{opt whatgenerate(newvar)}}store wrapper nuisance {it:W.hat}{p_end}
+{synopt:{opt yhatgenerate(newvar)}}store wrapper nuisance {it:Y.hat}{p_end}
+{synopt:{opt shatgenerate(newvar)}}store wrapper nuisance {it:S.hat}{p_end}
+{synopt:{opt chatgenerate(newvar)}}store wrapper nuisance {it:C.hat}{p_end}
 
 {syntab:Variance}
 {synopt:{opt estimatevariance}}compute variance estimates{p_end}
@@ -74,47 +83,47 @@
 
 {pstd}
 {cmd:grf_causal_survival_forest} estimates heterogeneous treatment effects for
-survival outcomes using the causal survival forest of Cui et al. (2023).
+survival outcomes using a causal-survival objective and nuisance moments.
 
-{pstd}
-The command supports two nuisance modes:
-
-{phang}
-{bf:Estimated IPCW mode} (default): nuisance quantities are estimated internally
-with regression/survival proxies, producing IPCW numerator/denominator columns
-used by the causal-survival forest objective.{p_end}
+{marker modes}{...}
+{title:Nuisance modes}
 
 {phang}
-{bf:Precomputed mode}: user supplies {cmd:numer()} and {cmd:denom()} directly.
-These must be supplied together.{p_end}
+{bf:auto} (default): nuisance surfaces are estimated internally and mapped to
+nuisance moments used by the forest objective.
+
+{phang}
+{bf:full_input}: provide all of {cmd:whatinput()}, {cmd:yhatinput()},
+{cmd:shatinput()}, and {cmd:chatinput()}.
+
+{phang}
+{bf:moment_input}: provide {cmd:numer()} and {cmd:denom()} directly.
 
 {pstd}
-Optional nuisance hooks {cmd:whatinput()}, {cmd:yhatinput()}, and
-{cmd:chatinput()} let advanced users override parts of the default nuisance
-pipeline while keeping the forest fit in Stata.
+{cmd:numer()/denom()} is mutually exclusive with nuisance-input options.
+Partial nuisance input (for example only {cmd:whatinput()}) is rejected.
 
 {marker options}{...}
 {title:Options}
 
 {phang}
-{opt numer(varname)} and {opt denom(varname)} specify precomputed nuisance
-moments. Use either both or neither.
+{opt numer(varname)} and {opt denom(varname)} specify expert moment overrides.
+These must be supplied together.
 
 {phang}
-{opt whatinput(varname)} supplies propensity nuisance estimates
-{it:W.hat = E[W|X]}.
+{opt whatinput(varname)} {opt yhatinput(varname)} {opt shatinput(varname)}
+and {opt chatinput(varname)} define full-input nuisance mode and must all be
+provided together.
 
 {phang}
-{opt yhatinput(varname)} supplies the outcome nuisance used in the IPCW
-moment construction.
+In the current wrapper implementation, {cmd:S.hat} contributions are used by
+the nuisance moment construction for {cmd:target(2)} (survival probability);
+for {cmd:target(1)} (RMST), the moment uses event-term weighting.
 
 {phang}
-{opt chatinput(varname)} supplies a censoring-survival proxy used in IPCW
-weighting; values are clipped internally to a numerically stable range.
-
-{phang}
-{opt target(#)} chooses the estimand used when constructing nuisance moments:
-{cmd:1} for RMST, {cmd:2} for survival probability at {cmd:horizon()}.
+{opt whatgenerate()}, {opt yhatgenerate()}, {opt shatgenerate()}, and
+{opt chatgenerate()} write nuisance surfaces used by the wrapper to user
+variables.
 
 {marker examples}{...}
 {title:Examples}
@@ -122,10 +131,10 @@ weighting; values are clipped internally to a numerically stable range.
 {pstd}Default nuisance estimation{p_end}
 {phang2}{cmd:. grf_causal_survival_forest time status w x1 x2 x3, gen(cs_tau)}{p_end}
 
-{pstd}User-supplied nuisance hooks{p_end}
-{phang2}{cmd:. grf_causal_survival_forest time status w x1 x2 x3, gen(cs_tau2) horizon(4) whatinput(wh) yhatinput(yh) chatinput(ch)}{p_end}
+{pstd}Full nuisance-input mode{p_end}
+{phang2}{cmd:. grf_causal_survival_forest time status w x1 x2 x3, gen(cs_tau2) horizon(4) whatinput(wh) yhatinput(yh) shatinput(sh) chatinput(ch)}{p_end}
 
-{pstd}Fully precomputed nuisance moments{p_end}
+{pstd}Moment-input override mode{p_end}
 {phang2}{cmd:. grf_causal_survival_forest time status w x1 x2 x3, gen(cs_tau3) numer(num) denom(den)}{p_end}
 
 {marker results}{...}
@@ -134,8 +143,8 @@ weighting; values are clipped internally to a numerically stable range.
 {pstd}
 {cmd:grf_causal_survival_forest} stores the following in {cmd:e()}:
 
-{synoptset 28 tabbed}{...}
-{p2col 5 28 32 2: Scalars}{p_end}
+{synoptset 30 tabbed}{...}
+{p2col 5 30 34 2: Scalars}{p_end}
 {synopt:{cmd:e(N)}}observations used{p_end}
 {synopt:{cmd:e(n_events)}}event count{p_end}
 {synopt:{cmd:e(n_censored)}}censored count{p_end}
@@ -145,26 +154,19 @@ weighting; values are clipped internally to a numerically stable range.
 {synopt:{cmd:e(ate)}}mean CATE prediction{p_end}
 {synopt:{cmd:e(ate_se)}}SE of mean CATE prediction{p_end}
 
-{p2col 5 28 32 2: Macros}{p_end}
+{p2col 5 30 34 2: Macros}{p_end}
 {synopt:{cmd:e(cmd)}}{cmd:grf_causal_survival_forest}{p_end}
 {synopt:{cmd:e(forest_type)}}{cmd:causal_survival}{p_end}
 {synopt:{cmd:e(predict_var)}}CATE output variable{p_end}
 {synopt:{cmd:e(variance_var)}}variance output variable (if requested){p_end}
-{synopt:{cmd:e(what_var)}}stored propensity nuisance variable ({cmd:_grf_cs_what}){p_end}
-{synopt:{cmd:e(numer_var)}}stored IPCW numerator variable ({cmd:_grf_cs_numer}){p_end}
-{synopt:{cmd:e(denom_var)}}stored IPCW denominator variable ({cmd:_grf_cs_denom}){p_end}
-{synopt:{cmd:e(yhat_var)}}stored outcome nuisance variable when available ({cmd:_grf_cs_yhat}){p_end}
-{synopt:{cmd:e(chat_var)}}stored censoring nuisance variable when available ({cmd:_grf_cs_chat}){p_end}
-{synopt:{cmd:e(nuisance_mode)}}{cmd:estimated_ipcw} or {cmd:precomputed_numer_denom}{p_end}
-
-{marker references}{...}
-{title:References}
-
-{pstd}
-Cui, Y., M. R. Kosorok, E. Sverdrup, S. Wager, and R. Zhu. 2023.
-Estimating Heterogeneous Treatment Effects with Right-Censored Data via
-Causal Survival Forests. {it:Journal of the Royal Statistical Society, Series B} 85(2): 179-211.
-
-{pstd}
-Athey, S., J. Tibshirani, and S. Wager. 2019.
-Generalized Random Forests. {it:Annals of Statistics} 47(2): 1148-1178.
+{synopt:{cmd:e(nuisance_mode)}}{cmd:auto}, {cmd:full_input}, or {cmd:moment_input}{p_end}
+{synopt:{cmd:e(what_var)}}canonical nuisance variable ({cmd:_grf_cs_what}){p_end}
+{synopt:{cmd:e(yhat_var)}}canonical nuisance variable ({cmd:_grf_cs_yhat}){p_end}
+{synopt:{cmd:e(shat_var)}}canonical nuisance variable ({cmd:_grf_cs_shat}){p_end}
+{synopt:{cmd:e(chat_var)}}canonical nuisance variable ({cmd:_grf_cs_chat}){p_end}
+{synopt:{cmd:e(numer_var)}}canonical nuisance variable ({cmd:_grf_cs_numer}){p_end}
+{synopt:{cmd:e(denom_var)}}canonical nuisance variable ({cmd:_grf_cs_denom}){p_end}
+{synopt:{cmd:e(what_generate)}}user-generated nuisance output (if requested){p_end}
+{synopt:{cmd:e(yhat_generate)}}user-generated nuisance output (if requested){p_end}
+{synopt:{cmd:e(shat_generate)}}user-generated nuisance output (if requested){p_end}
+{synopt:{cmd:e(chat_generate)}}user-generated nuisance output (if requested){p_end}

@@ -619,6 +619,20 @@ save_csv(output_cs, "causal_survival_output")
 cat("  CATE mean:", mean(pred_cs$predictions), "\n")
 cat("  Horizon used:", horizon_val, "\n")
 
+# Causal-survival DR scores and nuisance moments
+scores_cs <- get_scores(csf)
+scores_cs_df <- data.frame(score = as.vector(scores_cs))
+save_csv(scores_cs_df, "causal_survival_scores")
+
+vhat_cs <- if (all(W_cs %in% c(0, 1))) csf$W.hat * (1 - csf$W.hat) else rep(NA_real_, length(W_cs))
+cs_nuisance_df <- data.frame(
+  w_hat = as.vector(csf$W.hat),
+  numerator = as.vector(csf[["_psi"]]$numerator),
+  denominator = as.vector(csf[["_psi"]]$denominator),
+  v_hat = as.vector(vhat_cs)
+)
+save_csv(cs_nuisance_df, "causal_survival_nuisance")
+
 # Save horizon for Stata test to use
 horizon_df <- data.frame(horizon = horizon_val)
 save_csv(horizon_df, "causal_survival_horizon")

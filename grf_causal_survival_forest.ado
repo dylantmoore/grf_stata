@@ -1,13 +1,6 @@
 *! grf_causal_survival_forest.ado -- Causal Survival Forest via grf C++ library
-*! Version 0.2.0
+*! Version 0.3.0
 *! Implements Cui et al. (2023) causal_survival_forest()
-*!
-*! NOTE: Full implementation requires a multi-step nuisance estimation pipeline
-*! (survival forest for S.hat, regression forests for censoring/treatment models).
-*! This version supports:
-*!   1. Pre-computed nuisance columns via numer()/denom()
-*!   2. Auto IPCW nuisance pipeline (default)
-*!   3. Partial user nuisance overrides via whatinput()/yhatinput()/chatinput()
 
 program define grf_causal_survival_forest, eclass
     version 14.0
@@ -24,7 +17,7 @@ program define grf_causal_survival_forest, eclass
             HONestyfrac(real 0.5)              ///
             noHONestyprune                     ///
             ALPha(real 0.05)                   ///
-            IMBalancepenalty(real 0.0)          ///
+            IMBalancepenalty(real 0.0)         ///
             CIGroupsize(integer 1)             ///
             NUMThreads(integer 0)              ///
             ESTIMATEVariance                   ///
@@ -33,7 +26,12 @@ program define grf_causal_survival_forest, eclass
             DENom(varname numeric)             ///
             WHATinput(varname numeric)         ///
             YHATinput(varname numeric)         ///
+            SHATinput(varname numeric)         ///
             CHATinput(varname numeric)         ///
+            WHATGenerate(name)                 ///
+            YHATGenerate(name)                 ///
+            SHATGenerate(name)                 ///
+            CHATGenerate(name)                 ///
             HORizon(real 0)                    ///
             TARget(integer 1)                  ///
             REPlace                            ///
@@ -51,6 +49,36 @@ program define grf_causal_survival_forest, eclass
     if ("`numer'" != "" & "`denom'" == "") | ("`numer'" == "" & "`denom'" != "") {
         display as error "numer() and denom() must be supplied together"
         exit 198
+    }
+
+    local n_partial_inputs 0
+    foreach _opt in whatinput yhatinput shatinput chatinput {
+        if "``_opt''" != "" {
+            local n_partial_inputs = `n_partial_inputs' + 1
+        }
+    }
+
+    if "`numer'" != "" & `n_partial_inputs' > 0 {
+        display as error "numer()/denom() is mutually exclusive with whatinput()/yhatinput()/shatinput()/chatinput()"
+        exit 198
+    }
+
+    if "`numer'" == "" & `n_partial_inputs' > 0 & `n_partial_inputs' < 4 {
+        display as error "full nuisance input mode requires all of whatinput(), yhatinput(), shatinput(), and chatinput()"
+        exit 198
+    }
+
+    if !inlist(`target', 1, 2) {
+        display as error "target() must be 1 (RMST) or 2 (survival probability)"
+        exit 198
+    }
+
+    local nuisance_mode "auto"
+    if "`numer'" != "" {
+        local nuisance_mode "moment_input"
+    }
+    else if `n_partial_inputs' == 4 {
+        local nuisance_mode "full_input"
     }
 
     /* ---- Parse honesty ---- */
@@ -104,8 +132,18 @@ program define grf_causal_survival_forest, eclass
         if `do_est_var' & "`vargenerate'" != "" {
             capture drop `vargenerate'
         }
+        foreach _g in whatgenerate yhatgenerate shatgenerate chatgenerate {
+            if "``_g''" != "" {
+                capture drop ``_g''
+            }
+        }
     }
     confirm new variable `generate'
+    foreach _g in whatgenerate yhatgenerate shatgenerate chatgenerate {
+        if "``_g''" != "" {
+            confirm new variable ``_g''
+        }
+    }
 
     /* ---- Parse varlist: timevar statusvar treatvar indepvars ---- */
     gettoken timevar rest : varlist
@@ -144,6 +182,9 @@ program define grf_causal_survival_forest, eclass
     if "`yhatinput'" != "" {
         markout `touse' `yhatinput'
     }
+    if "`shatinput'" != "" {
+        markout `touse' `shatinput'
+    }
     if "`chatinput'" != "" {
         markout `touse' `chatinput'
     }
@@ -162,15 +203,12 @@ program define grf_causal_survival_forest, eclass
             display as error "equalizeclusterweights requires cluster() option"
             exit 198
         }
-        /* Compute 1/cluster_size for each observation */
         tempvar _eq_clsize _eq_wt
         quietly bysort `cluster': gen long `_eq_clsize' = _N if `touse'
         quietly gen double `_eq_wt' = 1.0 / `_eq_clsize' if `touse'
-        /* Combine with existing weights if any */
         if "`weight_var'" != "" {
             quietly replace `_eq_wt' = `_eq_wt' * `weight_var' if `touse'
         }
-        /* Use equalized weights as the weight variable */
         local weight_var `_eq_wt'
     }
 
@@ -200,29 +238,28 @@ program define grf_causal_survival_forest, eclass
         display as error "treatment variable `treatvar' has no variation"
         exit 198
     }
+    quietly count if !inlist(`treatvar', 0, 1) & `touse'
+    local binary_treat = (r(N) == 0)
 
     /* ---- Determine horizon ---- */
     if `horizon' == 0 {
-        /* Default: use the median failure time */
         quietly summarize `timevar' if `statusvar' == 1 & `touse', detail
         local horizon = r(p50)
         display as text "(horizon not specified; using median failure time: " ///
             as result %9.3f `horizon' as text ")"
     }
 
-        /* ---- Inline tuning ---- */
+    /* ---- Inline tuning ---- */
     if `"`tuneparameters'"' != "" {
         display as text ""
         display as text "Running inline parameter tuning..."
         display as text "  Parameters: `tuneparameters'"
         display as text "  Tune trees: `tunenumtrees'  Tune reps: `tunenumreps'"
 
-        /* Call grf_tune to find best parameters */
         grf_tune `varlist' if `touse', foresttype(causal_survival) ///
             numreps(`tunenumreps') tunetrees(`tunenumtrees') seed(`seed') ///
             numthreads(`numthreads') horizon(`horizon')
 
-        /* Override specified parameters with tuned values */
         foreach _tp of local tuneparameters {
             if "`_tp'" == "mtry" {
                 local mtry = r(best_mtry)
@@ -268,6 +305,7 @@ program define grf_causal_survival_forest, eclass
     display as text "Stabilize splits:      " as result cond(`do_stabilize', "yes", "no")
     display as text "Horizon:               " as result %9.3f `horizon'
     display as text "Target:                " as result cond(`target'==1, "RMST", "survival probability")
+    display as text "Nuisance mode:         " as result "`nuisance_mode'"
     if `do_est_var' {
         display as text "Variance estimation:   " as result "yes (ci_group_size=`cigroupsize')"
     }
@@ -280,31 +318,7 @@ program define grf_causal_survival_forest, eclass
 
     capture program grf_plugin, plugin using("grf_plugin_`c_os_'.plugin")
 
-    /* ==== Nuisance estimation pipeline ====
-     *
-     * Causal survival forests (Cui et al. 2023) require:
-     *   1. S.hat: conditional survival function via survival forest
-     *   2. C.hat: conditional censoring survival function
-     *   3. W.hat: propensity scores P(W=1|X)
-     *   4. Compute IPCW-style numerator/denominator for each obs
-     *
-     * If user supplies numer() and denom(), skip the pipeline.
-     * Otherwise, estimate internally.
-     */
-
-    local precomputed 0
-    local nuisance_mode "auto"
-    local yhat_source ""
-    local chat_source ""
-    if "`numer'" != "" & "`denom'" != "" {
-        local precomputed 1
-        local nuisance_mode "precomputed_numer_denom"
-        display as text "Using pre-computed nuisance columns:"
-        display as text "  Numerator: `numer'"
-        display as text "  Denominator: `denom'"
-    }
-
-    /* Nuisance column indices (regression: X + Y = nindep + 1 data cols) */
+    /* Nuisance regression indices: X + Y (+ optional cluster/weight) */
     local _nuis_data_cols = `nindep' + 1
     local _nuis_cluster_idx 0
     local _nuis_weight_idx 0
@@ -319,7 +333,6 @@ program define grf_causal_survival_forest, eclass
         local _nuis_weight_idx = `_nuis_data_cols' + `_nuis_offset' + 1
     }
 
-    /* Build extra_vars for nuisance calls */
     local extra_vars ""
     if "`cluster_var'" != "" {
         local extra_vars `extra_vars' `cluster_var'
@@ -328,229 +341,294 @@ program define grf_causal_survival_forest, eclass
         local extra_vars `extra_vars' `weight_var'
     }
 
-    if `precomputed' == 0 {
-        /* ---- Step 1: Estimate propensity scores W.hat = E[W|X] ---- */
-        if "`whatinput'" != "" {
-            display as text "Step 1/4: Using user-supplied propensity scores from `whatinput'"
-            tempvar what
-            quietly gen double `what' = `whatinput' if `touse'
-        }
-        else {
-            display as text "Step 1/4: Estimating propensity scores W ~ X ..."
-            tempvar what
-            quietly gen double `what' = .
-            plugin call grf_plugin `indepvars' `treatvar' `extra_vars' `what' ///
-                if `touse',                                       ///
-                "regression"                                      ///
-                "`ntrees'"                                        ///
-                "`seed'"                                          ///
-                "`mtry'"                                          ///
-                "`minnodesize'"                                   ///
-                "`samplefrac'"                                    ///
-                "`do_honesty'"                                    ///
-                "`honestyfrac'"                                   ///
-                "`do_honesty_prune'"                              ///
-                "`alpha'"                                         ///
-                "`imbalancepenalty'"                               ///
-                "`cigroupsize'"                                   ///
-                "`numthreads'"                                    ///
-                "0"                                               ///
-                "0"                                               ///
-                "`nindep'"                                        ///
-                "1"                                               ///
-                "0"                                               ///
-                "0"                                               ///
-                "1"                                               ///
-                "`allow_missing_x'"                               ///
-                "`_nuis_cluster_idx'"                             ///
-                "`_nuis_weight_idx'"
-        }
+    local what_source ""
+    local yhat_source ""
+    local shat_source ""
+    local chat_source ""
+    local numer_source "`numer'"
+    local denom_source "`denom'"
 
-        /* ---- Step 2: Fit censoring survival forest C.hat ----
-         *
-         * Fit survival forest on (X+W, T, 1-D) to estimate conditional
-         * censoring probabilities C.hat(t|X,W) = P(C > t | X, W).
-         * Then extract C.hat evaluated at each observation's time and
-         * at the horizon for IPCW weights.
-         */
-
-        display as text "Step 2/4: Fitting censoring survival forest C.hat ..."
-
-        tempvar w_centered
-        quietly gen double `w_centered' = `treatvar' - `what' if `touse'
-
-        /* Flip event indicator: 1-D so censoring is the "event" */
-        tempvar censor_ind
-        quietly gen byte `censor_ind' = 1 - `statusvar' if `touse'
-
-        /* Fit censoring forest on (X, W, T, 1-D) with reduced trees */
-        local nuis_trees = max(50, min(`ntrees' / 4, 500))
-        /* Use regression forest to estimate E[T|X,W] as Y.hat proxy */
-        tempvar yhat
-        quietly gen double `yhat' = .
-
-        /* Compute f(Y) = min(Y, horizon) for RMST target
-         * (or 1{Y > horizon} for survival probability) */
-        tempvar fY
-        if `target' == 2 {
-            quietly gen double `fY' = (`timevar' > `horizon') if `touse'
-        }
-        else {
-            quietly gen double `fY' = min(`timevar', `horizon') if `touse'
-        }
-
-        if "`yhatinput'" != "" {
-            display as text "  Using user-supplied Y.hat from `yhatinput'"
-            quietly replace `yhat' = `yhatinput' if `touse'
-            local yhat_source "`yhatinput'"
-        }
-        else {
-            /* Fit Y.hat = E[f(Y)|X] using regression forest on uncensored obs */
-            plugin call grf_plugin `indepvars' `fY' `extra_vars' `yhat' ///
-                if `touse',                                            ///
-                "regression"                                           ///
-                "`nuis_trees'"                                         ///
-                "`seed'"                                               ///
-                "`mtry'"                                               ///
-                "15"                                                   ///
-                "`samplefrac'"                                         ///
-                "`do_honesty'"                                         ///
-                "`honestyfrac'"                                        ///
-                "`do_honesty_prune'"                                   ///
-                "`alpha'"                                              ///
-                "`imbalancepenalty'"                                    ///
-                "1"                                                    ///
-                "`numthreads'"                                         ///
-                "0"                                                    ///
-                "0"                                                    ///
-                "`nindep'"                                             ///
-                "1"                                                    ///
-                "0"                                                    ///
-                "0"                                                    ///
-                "1"                                                    ///
-                "`allow_missing_x'"                                    ///
-                "`_nuis_cluster_idx'"                                  ///
-                "`_nuis_weight_idx'"
-            local yhat_source "`yhat'"
-        }
-
-        /* Fit censoring regression: E[D|X,W] as proxy for C.hat(T|X,W) */
-        tempvar chat_proxy
-        quietly gen double `chat_proxy' = .
-
-        if "`chatinput'" != "" {
-            display as text "  Using user-supplied C.hat from `chatinput'"
-            quietly replace `chat_proxy' = `chatinput' if `touse'
-            local chat_source "`chatinput'"
-        }
-        else {
-            plugin call grf_plugin `indepvars' `statusvar' `extra_vars' `chat_proxy' ///
-                if `touse',                                            ///
-                "regression"                                           ///
-                "`nuis_trees'"                                         ///
-                "`seed'"                                               ///
-                "`mtry'"                                               ///
-                "15"                                                   ///
-                "`samplefrac'"                                         ///
-                "`do_honesty'"                                         ///
-                "`honestyfrac'"                                        ///
-                "`do_honesty_prune'"                                   ///
-                "`alpha'"                                              ///
-                "`imbalancepenalty'"                                    ///
-                "1"                                                    ///
-                "`numthreads'"                                         ///
-                "0"                                                    ///
-                "0"                                                    ///
-                "`nindep'"                                             ///
-                "1"                                                    ///
-                "0"                                                    ///
-                "0"                                                    ///
-                "1"                                                    ///
-                "`allow_missing_x'"                                    ///
-                "`_nuis_cluster_idx'"                                  ///
-                "`_nuis_weight_idx'"
-            local chat_source "`chat_proxy'"
-        }
-
-        /* C.hat proxy = P(not censored | X,W) = E[D|X,W]
-         * Clip to [0.001, 1.0] for numerical stability */
-        quietly replace `chat_proxy' = max(`chat_proxy', 0.001) if `touse'
-        quietly replace `chat_proxy' = min(`chat_proxy', 1.0) if `touse'
-
-        /* ---- Step 3: Compute IPCW numerator/denominator ----
-         *
-         * IPCW pseudo-outcome following Cui et al. (2023):
-         *   numerator_i = W.centered * (D_i * (f(Y_i) - Y.hat_i) +
-         *                  (1 - D_i) * 0) / max(C.hat_i, eps)
-         *   denominator_i = W.centered^2
-         *
-         * This is a simplified but proper IPCW that uses conditional
-         * censoring probabilities rather than constant weights.
-         */
-
-        display as text "Step 3/4: Computing IPCW pseudo-outcomes ..."
-
-        tempvar cs_numer cs_denom
-        /* For events (D=1): IPCW weighted outcome deviation
-         * For censored (D=0): contribute 0 (conservative) */
-        quietly gen double `cs_numer' = `w_centered' * ///
-            `statusvar' * (`fY' - `yhat') / `chat_proxy' if `touse'
-        quietly gen double `cs_denom' = `w_centered' * `w_centered' if `touse'
-
-        /* Ensure denominator is positive (avoid division by zero in plugin) */
-        quietly replace `cs_denom' = max(`cs_denom', 1e-10) if `touse'
-
-        display as text "  Nuisance preparation complete."
-
-        local numer `cs_numer'
-        local denom `cs_denom'
-        local nuisance_mode "estimated_ipcw"
+    /* Shared transformed outcome f(Y) */
+    tempvar fY
+    if `target' == 2 {
+        quietly gen double `fY' = (`timevar' > `horizon') if `touse'
     }
     else {
-        display as text "Steps 1-3: Skipped (using pre-computed nuisance columns)."
+        quietly gen double `fY' = min(`timevar', `horizon') if `touse'
+    }
 
-        /* Center treatment even in precomputed mode */
-        if "`whatinput'" != "" {
-            display as text "  Using user-supplied propensity scores from `whatinput'"
-            tempvar what
-            quietly gen double `what' = `whatinput' if `touse'
+    if "`nuisance_mode'" == "full_input" {
+        display as text "Step 1/4: Using full user-supplied nuisance inputs"
+
+        tempvar what yhat shat chat_proxy w_centered cs_numer cs_denom
+        quietly gen double `what' = `whatinput' if `touse'
+        quietly gen double `yhat' = `yhatinput' if `touse'
+        quietly gen double `shat' = `shatinput' if `touse'
+        quietly gen double `chat_proxy' = `chatinput' if `touse'
+
+        if `binary_treat' {
+            quietly replace `what' = min(max(`what', 1e-6), 1 - 1e-6) if `touse'
+        }
+        quietly replace `shat' = min(max(`shat', 0.001), 1.0) if `touse'
+        quietly replace `chat_proxy' = min(max(`chat_proxy', 0.001), 1.0) if `touse'
+
+        quietly gen double `w_centered' = `treatvar' - `what' if `touse'
+        quietly gen double `cs_numer' = .
+        if `target' == 2 {
+            quietly replace `cs_numer' = `w_centered' * ///
+                (`statusvar' * (`fY' - `yhat') + (1 - `statusvar') * (`shat' - `yhat')) / `chat_proxy' if `touse'
         }
         else {
-            tempvar what
-            quietly gen double `what' = .
-            plugin call grf_plugin `indepvars' `treatvar' `extra_vars' `what' ///
-                if `touse',                                       ///
-                "regression"                                      ///
-                "`ntrees'"                                        ///
-                "`seed'"                                          ///
-                "`mtry'"                                          ///
-                "`minnodesize'"                                   ///
-                "`samplefrac'"                                    ///
-                "`do_honesty'"                                    ///
-                "`honestyfrac'"                                   ///
-                "`do_honesty_prune'"                              ///
-                "`alpha'"                                         ///
-                "`imbalancepenalty'"                               ///
-                "`cigroupsize'"                                   ///
-                "`numthreads'"                                    ///
-                "0"                                               ///
-                "0"                                               ///
-                "`nindep'"                                        ///
-                "1"                                               ///
-                "0"                                               ///
-                "0"                                               ///
-                "1"                                               ///
-                "`allow_missing_x'"                               ///
-                "`_nuis_cluster_idx'"                             ///
-                "`_nuis_weight_idx'"
+            quietly replace `cs_numer' = `w_centered' * ///
+                `statusvar' * (`fY' - `yhat') / `chat_proxy' if `touse'
         }
+        quietly gen double `cs_denom' = max(`w_centered' * `w_centered', 1e-10) if `touse'
 
-        if "`yhatinput'" != "" {
-            local yhat_source "`yhatinput'"
+        local what_source `what'
+        local yhat_source `yhat'
+        local shat_source `shat'
+        local chat_source `chat_proxy'
+        local numer_source `cs_numer'
+        local denom_source `cs_denom'
+
+        display as text "  Full-input nuisance moments prepared."
+    }
+    else if "`nuisance_mode'" == "auto" {
+        local nuis_trees = max(50, min(`ntrees' / 4, 500))
+
+        display as text "Step 1/4: Estimating propensity scores W.hat = E[W|X]"
+        tempvar what
+        quietly gen double `what' = .
+        plugin call grf_plugin `indepvars' `treatvar' `extra_vars' `what' ///
+            if `touse',                                       ///
+            "regression"                                      ///
+            "`ntrees'"                                        ///
+            "`seed'"                                          ///
+            "`mtry'"                                          ///
+            "`minnodesize'"                                   ///
+            "`samplefrac'"                                    ///
+            "`do_honesty'"                                    ///
+            "`honestyfrac'"                                   ///
+            "`do_honesty_prune'"                              ///
+            "`alpha'"                                         ///
+            "`imbalancepenalty'"                              ///
+            "`cigroupsize'"                                   ///
+            "`numthreads'"                                    ///
+            "0"                                               ///
+            "0"                                               ///
+            "`nindep'"                                        ///
+            "1"                                               ///
+            "0"                                               ///
+            "0"                                               ///
+            "1"                                               ///
+            "`allow_missing_x'"                               ///
+            "`_nuis_cluster_idx'"                             ///
+            "`_nuis_weight_idx'"
+
+        if `binary_treat' {
+            quietly replace `what' = min(max(`what', 1e-6), 1 - 1e-6) if `touse'
         }
-        if "`chatinput'" != "" {
-            local chat_source "`chatinput'"
+        local what_source `what'
+
+        display as text "Step 2/4: Estimating Y.hat, S.hat, and C.hat"
+
+        tempvar yhat
+        quietly gen double `yhat' = .
+        plugin call grf_plugin `indepvars' `fY' `extra_vars' `yhat' ///
+            if `touse',                                            ///
+            "regression"                                           ///
+            "`nuis_trees'"                                         ///
+            "`seed'"                                               ///
+            "`mtry'"                                               ///
+            "15"                                                   ///
+            "`samplefrac'"                                         ///
+            "`do_honesty'"                                         ///
+            "`honestyfrac'"                                        ///
+            "`do_honesty_prune'"                                   ///
+            "`alpha'"                                              ///
+            "`imbalancepenalty'"                                   ///
+            "1"                                                    ///
+            "`numthreads'"                                         ///
+            "0"                                                    ///
+            "0"                                                    ///
+            "`nindep'"                                             ///
+            "1"                                                    ///
+            "0"                                                    ///
+            "0"                                                    ///
+            "1"                                                    ///
+            "`allow_missing_x'"                                    ///
+            "`_nuis_cluster_idx'"                                  ///
+            "`_nuis_weight_idx'"
+        local yhat_source `yhat'
+
+        tempvar surv_ind shat
+        quietly gen double `surv_ind' = (`timevar' > `horizon') if `touse'
+        quietly gen double `shat' = .
+        plugin call grf_plugin `indepvars' `surv_ind' `extra_vars' `shat' ///
+            if `touse',                                               ///
+            "regression"                                              ///
+            "`nuis_trees'"                                            ///
+            "`seed'"                                                  ///
+            "`mtry'"                                                  ///
+            "15"                                                      ///
+            "`samplefrac'"                                            ///
+            "`do_honesty'"                                            ///
+            "`honestyfrac'"                                           ///
+            "`do_honesty_prune'"                                      ///
+            "`alpha'"                                                 ///
+            "`imbalancepenalty'"                                      ///
+            "1"                                                       ///
+            "`numthreads'"                                            ///
+            "0"                                                       ///
+            "0"                                                       ///
+            "`nindep'"                                                ///
+            "1"                                                       ///
+            "0"                                                       ///
+            "0"                                                       ///
+            "1"                                                       ///
+            "`allow_missing_x'"                                       ///
+            "`_nuis_cluster_idx'"                                     ///
+            "`_nuis_weight_idx'"
+        quietly replace `shat' = min(max(`shat', 0.001), 1.0) if `touse'
+        local shat_source `shat'
+
+        tempvar chat_proxy
+        quietly gen double `chat_proxy' = .
+        plugin call grf_plugin `indepvars' `statusvar' `extra_vars' `chat_proxy' ///
+            if `touse',                                            ///
+            "regression"                                           ///
+            "`nuis_trees'"                                         ///
+            "`seed'"                                               ///
+            "`mtry'"                                               ///
+            "15"                                                   ///
+            "`samplefrac'"                                         ///
+            "`do_honesty'"                                         ///
+            "`honestyfrac'"                                        ///
+            "`do_honesty_prune'"                                   ///
+            "`alpha'"                                              ///
+            "`imbalancepenalty'"                                   ///
+            "1"                                                    ///
+            "`numthreads'"                                         ///
+            "0"                                                    ///
+            "0"                                                    ///
+            "`nindep'"                                             ///
+            "1"                                                    ///
+            "0"                                                    ///
+            "0"                                                    ///
+            "1"                                                    ///
+            "`allow_missing_x'"                                    ///
+            "`_nuis_cluster_idx'"                                  ///
+            "`_nuis_weight_idx'"
+        quietly replace `chat_proxy' = min(max(`chat_proxy', 0.001), 1.0) if `touse'
+        local chat_source `chat_proxy'
+
+        display as text "Step 3/4: Computing nuisance moments"
+        tempvar w_centered cs_numer cs_denom
+        quietly gen double `w_centered' = `treatvar' - `what' if `touse'
+        quietly gen double `cs_numer' = .
+        if `target' == 2 {
+            quietly replace `cs_numer' = `w_centered' * ///
+                (`statusvar' * (`fY' - `yhat') + (1 - `statusvar') * (`shat' - `yhat')) / `chat_proxy' if `touse'
         }
+        else {
+            quietly replace `cs_numer' = `w_centered' * ///
+                `statusvar' * (`fY' - `yhat') / `chat_proxy' if `touse'
+        }
+        quietly gen double `cs_denom' = max(`w_centered' * `w_centered', 1e-10) if `touse'
+        local numer_source `cs_numer'
+        local denom_source `cs_denom'
+    }
+    else {
+        display as text "Step 1/2: Using moment input override numer()/denom()"
+        display as text "  Numerator:   `numer'"
+        display as text "  Denominator: `denom'"
+
+        tempvar what
+        quietly gen double `what' = .
+        plugin call grf_plugin `indepvars' `treatvar' `extra_vars' `what' ///
+            if `touse',                                       ///
+            "regression"                                      ///
+            "`ntrees'"                                        ///
+            "`seed'"                                          ///
+            "`mtry'"                                          ///
+            "`minnodesize'"                                   ///
+            "`samplefrac'"                                    ///
+            "`do_honesty'"                                    ///
+            "`honestyfrac'"                                   ///
+            "`do_honesty_prune'"                              ///
+            "`alpha'"                                         ///
+            "`imbalancepenalty'"                              ///
+            "`cigroupsize'"                                   ///
+            "`numthreads'"                                    ///
+            "0"                                               ///
+            "0"                                               ///
+            "`nindep'"                                        ///
+            "1"                                               ///
+            "0"                                               ///
+            "0"                                               ///
+            "1"                                               ///
+            "`allow_missing_x'"                               ///
+            "`_nuis_cluster_idx'"                             ///
+            "`_nuis_weight_idx'"
+        if `binary_treat' {
+            quietly replace `what' = min(max(`what', 1e-6), 1 - 1e-6) if `touse'
+        }
+        local what_source `what'
+    }
+
+    /* ---- Persist canonical nuisance artifacts ---- */
+    capture drop _grf_cs_what
+    quietly gen double _grf_cs_what = .
+    quietly replace _grf_cs_what = `what_source' if `touse'
+    label variable _grf_cs_what "W.hat nuisance used by causal-survival wrapper"
+
+    capture drop _grf_cs_yhat
+    quietly gen double _grf_cs_yhat = .
+    if "`yhat_source'" != "" {
+        quietly replace _grf_cs_yhat = `yhat_source' if `touse'
+    }
+    label variable _grf_cs_yhat "Y.hat nuisance used by causal-survival wrapper"
+
+    capture drop _grf_cs_shat
+    quietly gen double _grf_cs_shat = .
+    if "`shat_source'" != "" {
+        quietly replace _grf_cs_shat = `shat_source' if `touse'
+    }
+    label variable _grf_cs_shat "S.hat nuisance used by causal-survival wrapper"
+
+    capture drop _grf_cs_chat
+    quietly gen double _grf_cs_chat = .
+    if "`chat_source'" != "" {
+        quietly replace _grf_cs_chat = `chat_source' if `touse'
+    }
+    label variable _grf_cs_chat "C.hat nuisance used by causal-survival wrapper"
+
+    capture drop _grf_cs_numer
+    quietly gen double _grf_cs_numer = .
+    quietly replace _grf_cs_numer = `numer_source' if `touse'
+    label variable _grf_cs_numer "Causal-survival nuisance numerator"
+
+    capture drop _grf_cs_denom
+    quietly gen double _grf_cs_denom = .
+    quietly replace _grf_cs_denom = `denom_source' if `touse'
+    label variable _grf_cs_denom "Causal-survival nuisance denominator"
+
+    /* ---- Optional user-facing nuisance outputs ---- */
+    if "`whatgenerate'" != "" {
+        quietly gen double `whatgenerate' = _grf_cs_what if `touse'
+        label variable `whatgenerate' "Stored W.hat nuisance from causal-survival fit"
+    }
+    if "`yhatgenerate'" != "" {
+        quietly gen double `yhatgenerate' = _grf_cs_yhat if `touse'
+        label variable `yhatgenerate' "Stored Y.hat nuisance from causal-survival fit"
+    }
+    if "`shatgenerate'" != "" {
+        quietly gen double `shatgenerate' = _grf_cs_shat if `touse'
+        label variable `shatgenerate' "Stored S.hat nuisance from causal-survival fit"
+    }
+    if "`chatgenerate'" != "" {
+        quietly gen double `chatgenerate' = _grf_cs_chat if `touse'
+        label variable `chatgenerate' "Stored C.hat nuisance from causal-survival fit"
     }
 
     /* ---- Create output variable(s) ---- */
@@ -588,56 +666,14 @@ program define grf_causal_survival_forest, eclass
         local weight_col_idx = `n_data_before' + 1
     }
 
-    /* ---- Save nuisance estimates ---- */
-    capture drop _grf_cs_what
-    quietly gen double _grf_cs_what = `what'
-    label variable _grf_cs_what "W.hat from propensity regression (W ~ X)"
-
-    capture drop _grf_cs_numer
-    quietly gen double _grf_cs_numer = `numer' if `touse'
-    label variable _grf_cs_numer "Causal-survival IPCW numerator"
-
-    capture drop _grf_cs_denom
-    quietly gen double _grf_cs_denom = `denom' if `touse'
-    label variable _grf_cs_denom "Causal-survival IPCW denominator"
-
-    capture drop _grf_cs_yhat
-    if "`yhat_source'" != "" {
-        quietly gen double _grf_cs_yhat = `yhat_source' if `touse'
-        label variable _grf_cs_yhat "Y.hat nuisance used by causal-survival wrapper"
-    }
-
-    capture drop _grf_cs_chat
-    if "`chat_source'" != "" {
-        quietly gen double _grf_cs_chat = `chat_source' if `touse'
-        label variable _grf_cs_chat "C.hat nuisance used by causal-survival wrapper"
-    }
-
-    /* ---- Call plugin for causal survival forest ----
-     *
-     * Variable order: X1..Xp time W.centered status cs_numer cs_denom out1 [out2]
-     *   n_x = nindep
-     *   n_y = 1 (survival time)
-     *   n_w = 1 (centered treatment)
-     *   n_z = 0
-     *   n_output = 1 or 2
-     *
-     * argv[0..19]: standard forest params
-     * argv[20]: stabilize_splits
-     * argv[21]: col index for cs_numer (relative, after X Y W status)
-     * argv[22]: col index for cs_denom
-     * argv[23]: col index for censor/status
-     * argv[24]: target (1=RMST, 2=survival probability)
-     */
-
-    /* Center treatment for the causal forest step */
+    /* ---- Call plugin for causal survival forest ---- */
     tempvar w_cent_final
-    quietly gen double `w_cent_final' = `treatvar' - `what' if `touse'
+    quietly gen double `w_cent_final' = `treatvar' - _grf_cs_what if `touse'
 
-    local step_n = cond(`precomputed', "2/2", "4/4")
+    local step_n = cond("`nuisance_mode'" == "moment_input", "2/2", "4/4")
     display as text "Step `step_n': Fitting causal survival forest ..."
     plugin call grf_plugin `indepvars' `timevar' `w_cent_final' ///
-        `statusvar' `numer' `denom' `extra_vars' `output_vars'   ///
+        `statusvar' _grf_cs_numer _grf_cs_denom `extra_vars' `output_vars' ///
         if `touse',                                              ///
         "causal_survival"                                        ///
         "`ntrees'"                                               ///
@@ -649,7 +685,7 @@ program define grf_causal_survival_forest, eclass
         "`honestyfrac'"                                          ///
         "`do_honesty_prune'"                                     ///
         "`alpha'"                                                ///
-        "`imbalancepenalty'"                                      ///
+        "`imbalancepenalty'"                                     ///
         "`cigroupsize'"                                          ///
         "`numthreads'"                                           ///
         "`do_est_var'"                                           ///
@@ -699,27 +735,40 @@ program define grf_causal_survival_forest, eclass
     ereturn scalar target      = `target'
     ereturn scalar ate         = `ate'
     ereturn scalar ate_se      = `ate_se'
-    ereturn local  cmd           "grf_causal_survival_forest"
     ereturn scalar allow_missing_x = `allow_missing_x'
-    ereturn local  forest_type   "causal_survival"
-    ereturn local  timevar       "`timevar'"
-    ereturn local  statusvar     "`statusvar'"
-    ereturn local  treatvar      "`treatvar'"
-    ereturn local  indepvars     "`indepvars'"
-    ereturn local  predict_var   "`generate'"
+    ereturn local cmd          "grf_causal_survival_forest"
+    ereturn local forest_type  "causal_survival"
+    ereturn local timevar      "`timevar'"
+    ereturn local statusvar    "`statusvar'"
+    ereturn local treatvar     "`treatvar'"
+    ereturn local indepvars    "`indepvars'"
+    ereturn local predict_var  "`generate'"
     if `do_est_var' {
         ereturn local variance_var "`vargenerate'"
     }
-    ereturn local what_var   "_grf_cs_what"
-    ereturn local numer_var  "_grf_cs_numer"
-    ereturn local denom_var  "_grf_cs_denom"
-    if "`yhat_source'" != "" {
-        ereturn local yhat_var "_grf_cs_yhat"
+
+    ereturn local what_var  "_grf_cs_what"
+    ereturn local yhat_var  "_grf_cs_yhat"
+    ereturn local shat_var  "_grf_cs_shat"
+    ereturn local chat_var  "_grf_cs_chat"
+    ereturn local numer_var "_grf_cs_numer"
+    ereturn local denom_var "_grf_cs_denom"
+
+    if "`whatgenerate'" != "" {
+        ereturn local what_generate "`whatgenerate'"
     }
-    if "`chat_source'" != "" {
-        ereturn local chat_var "_grf_cs_chat"
+    if "`yhatgenerate'" != "" {
+        ereturn local yhat_generate "`yhatgenerate'"
     }
+    if "`shatgenerate'" != "" {
+        ereturn local shat_generate "`shatgenerate'"
+    }
+    if "`chatgenerate'" != "" {
+        ereturn local chat_generate "`chatgenerate'"
+    }
+
     ereturn local nuisance_mode "`nuisance_mode'"
+
     if "`cluster_var'" != "" {
         ereturn local cluster_var "`cluster_var'"
     }

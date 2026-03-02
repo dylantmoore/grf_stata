@@ -145,10 +145,39 @@ See `help` for each command for complete stored results.
 - **User-supplied nuisance estimates**: supported for several forests (`yhatinput()`, `whatinput()`, `zhatinput()`, and related generators), but not every R nuisance hook is exposed for every forest family.
 - **Some forest-inspection utilities**: full tree/forest object persistence is constrained by the plugin architecture.
 - **APE deprecation**: R has deprecated `average_partial_effect()`. Stata retains `grf_average_partial_effect` for backward compatibility.
-- **Causal survival scores**: `grf_get_scores` now uses IPCW nuisance moments from the fitted causal-survival pipeline. Exact parity can still differ in advanced workflows that depend on unavailable upstream internals.
+- **Causal survival scores**: `grf_get_scores` uses `tau + psi / V.hat` with stored nuisance moments (`psi = numer - denom * tau`), matching current upstream score construction at the wrapper level.
 - **Package-level options API**: R's `grf_options()` is not mirrored; Stata uses per-command options by design.
 - **OOB prediction toggle**: R's `compute.oob.predictions` option is not exposed; Stata fit commands always materialize prediction outputs by command design.
 - **Upstream-constrained parity**: options such as `orthog.boosting` and enum-style `honesty.prune.method` are not exposed under the current vendored core API.
+
+### Introspection Coverage Notes
+
+- Partial introspection utilities are implemented and usable in Stata (`grf_forest_summary`, `grf_tree_summary`, `grf_get_tree`, `grf_get_leaf_node`, `grf_get_forest_weights`, `grf_split_frequencies`, `grf_plot_tree`).
+- `grf_forest_summary, all` now exposes all stored `e()` scalar/macro names for model-level inspection.
+- `grf_get_forest_weights` now supports combined prediction-space and feature-space proxy weights via `xvars()` and `predweight()`.
+- Remaining non-equivalent internals (exact node structures, exact forest weights, exact terminal-node IDs) are documented in:
+  `reviews/introspection_discrepancies.md`.
+
+## Parity Baseline Artifacts (Gaps 4/5/6)
+
+- Baseline pin: `reviews/parity_baseline.md`
+- Machine-extracted upstream API manifest: `reviews/r_api_manifest.json`
+- Generator script: `tools/extract_r_api_manifest.R`
+- Scope check script: `tools/check_parity_scope.R`
+
+Run:
+
+```bash
+Rscript tools/extract_r_api_manifest.R --tag v2.5.0 --out reviews/r_api_manifest.json
+Rscript tools/check_parity_scope.R reviews/r_api_manifest.json
+```
+
+## Migration Note (Causal Survival)
+
+- `grf_causal_survival_forest` now enforces explicit nuisance modes.
+- Partial nuisance override is no longer accepted. If using nuisance inputs, provide all of:
+  `whatinput()`, `yhatinput()`, `shatinput()`, and `chatinput()`.
+- `numer()/denom()` is now an explicit `moment_input` override and is mutually exclusive with nuisance-input mode.
 
 ## Testing
 

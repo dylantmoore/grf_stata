@@ -1,5 +1,16 @@
 # Implementation Issue Matrix (Consolidated Report)
 
+## Current baseline scope (requested gaps 4/5/6)
+
+| Gap | Resolution Type | Status | Primary Files |
+|---|---|---|---|
+| 4. `orthog.boosting` | Manifest-backed closure | Complete (non-applicable in upstream v2.5.0) | reviews/r_api_manifest.json, tools/extract_r_api_manifest.R, tools/check_parity_scope.R |
+| 5. `honesty.prune.method` enum | Manifest-backed closure | Complete (non-applicable in upstream v2.5.0) | reviews/r_api_manifest.json, tools/extract_r_api_manifest.R, tools/check_parity_scope.R |
+| 6. causal-survival nuisance parity + score construction | Implement | Complete | grf_causal_survival_forest.ado, grf_get_scores.ado, tests/test_options_causal_survival.do, tests/test_get_scores.do, tests/test_fidelity.do |
+| Advanced introspection parity | Partial implement + document | Complete | grf_forest_summary.ado, grf_get_forest_weights.ado, tests/test_forest_utilities.do, reviews/introspection_discrepancies.md |
+
+## Consolidated report scope (1-16)
+
 | Gap | Resolution Type | Status | Primary Files |
 |---|---|---|---|
 | 1. Fidelity consumption | Verify-and-lock | Complete | tests/test_fidelity.do |

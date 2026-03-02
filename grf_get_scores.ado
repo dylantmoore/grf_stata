@@ -1,6 +1,6 @@
-*! grf_get_scores.ado -- Extract DR/IPCW scores from supported GRF causal forests
-*! Version 0.3.0
-*! Computes AIPW-style or IPCW-moment-corrected scores for post-estimation analysis
+*! grf_get_scores.ado -- Extract doubly-robust scores from supported GRF causal forests
+*! Version 0.4.0
+*! Uses upstream-style score constructions (including causal-survival tau + psi / V.hat)
 
 program define grf_get_scores, rclass
     version 14.0
@@ -128,14 +128,16 @@ program define grf_get_scores, rclass
     }
 
     /* ====================================================================
-     * Causal survival forest: IPCW/DR scores from nuisance moments
+     * Causal survival forest: upstream-style DR scores
      * ==================================================================== */
     if "`forest_type'" == "causal_survival" {
-        local tauvar      "`e(predict_var)'"
-        local numervar    "`e(numer_var)'"
-        local denomvar    "`e(denom_var)'"
+        local tauvar        "`e(predict_var)'"
+        local numervar      "`e(numer_var)'"
+        local denomvar      "`e(denom_var)'"
+        local whatvar       "`e(what_var)'"
+        local treatvar      "`e(treatvar)'"
         local nuisance_mode "`e(nuisance_mode)'"
-        local cluster_var "`e(cluster_var)'"
+        local cluster_var   "`e(cluster_var)'"
 
         /* Handle replace */
         if "`replace'" != "" {
@@ -143,7 +145,7 @@ program define grf_get_scores, rclass
         }
         confirm new variable `generate'
 
-        /* Fall back to canonical nuisance variable names if e() macros are absent */
+        /* Fall back to canonical nuisance variables if e() macros are absent */
         if "`numervar'" == "" {
             capture confirm numeric variable _grf_cs_numer
             if !_rc local numervar "_grf_cs_numer"
@@ -152,9 +154,13 @@ program define grf_get_scores, rclass
             capture confirm numeric variable _grf_cs_denom
             if !_rc local denomvar "_grf_cs_denom"
         }
+        if "`whatvar'" == "" {
+            capture confirm numeric variable _grf_cs_what
+            if !_rc local whatvar "_grf_cs_what"
+        }
 
         /* Confirm required variables */
-        foreach v in tauvar numervar denomvar {
+        foreach v in tauvar numervar denomvar whatvar treatvar {
             if "``v''" == "" {
                 display as error "required variable not found: `v'"
                 exit 111
@@ -165,7 +171,7 @@ program define grf_get_scores, rclass
         /* Mark sample */
         tempvar touse
         quietly gen byte `touse' = 1
-        markout `touse' `tauvar' `numervar' `denomvar'
+        markout `touse' `tauvar' `numervar' `denomvar' `whatvar' `treatvar'
         quietly count if `touse'
         local n_use = r(N)
 
@@ -174,37 +180,43 @@ program define grf_get_scores, rclass
             exit 2000
         }
 
-        /* IPCW/DR moment correction for ratio estimands:
-         *
-         *   tau_hat_i = forest prediction
-         *   numer_i, denom_i = causal-survival nuisance moments
-         *
-         * Influence-style score:
-         *   score_i = tau_hat_i + (numer_i - denom_i * tau_hat_i) / E[denom]
-         *
-         * This uses the same orthogonal moments that define the causal-survival
-         * forest objective, and reduces to plug-in tau only when moment residuals
-         * are identically zero.
-         */
+        /* Compute psi = numerator - denominator * tau. */
+        tempvar psi vhat
+        quietly gen double `psi' = `numervar' - `denomvar' * `tauvar' if `touse'
         quietly summarize `denomvar' if `touse', meanonly
         local denom_mean = r(mean)
-        if abs(`denom_mean') < 1e-12 {
-            display as error "mean IPCW denominator is near zero; cannot compute scores"
+
+        /* Upstream uses V.hat = W.hat * (1 - W.hat) for binary W; fallback to
+         * denominator nuisance for non-binary W in this interface. */
+        quietly count if !inlist(`treatvar', 0, 1) & `touse'
+        local binary_treat = (r(N) == 0)
+
+        local vhat_source "denominator nuisance"
+        if `binary_treat' {
+            quietly gen double `vhat' = `whatvar' * (1 - `whatvar') if `touse'
+            local vhat_source "W.hat * (1 - W.hat)"
+        }
+        else {
+            quietly gen double `vhat' = `denomvar' if `touse'
+        }
+        quietly replace `vhat' = max(`vhat', 1e-12) if `touse'
+        quietly summarize `vhat' if `touse', meanonly
+        local vhat_mean = r(mean)
+        if abs(`vhat_mean') < 1e-12 {
+            display as error "effective V.hat is near zero; cannot compute scores"
             exit 498
         }
 
-        tempvar moment_resid
-        quietly gen double `moment_resid' = `numervar' - `denomvar' * `tauvar' if `touse'
-        quietly gen double `generate' = `tauvar' + (`moment_resid' / `denom_mean') if `touse'
-        label variable `generate' "IPCW doubly-robust scores from causal_survival forest"
+        quietly gen double `generate' = `tauvar' + (`psi' / `vhat') if `touse'
+        label variable `generate' "Doubly-robust scores from causal_survival forest"
 
         /* Summary statistics */
         quietly summarize `generate' if `touse', detail
-        local n_scores = r(N)
+        local n_scores  = r(N)
         local score_mean = r(mean)
-        local score_sd = r(sd)
-        local score_min = r(min)
-        local score_max = r(max)
+        local score_sd   = r(sd)
+        local score_min  = r(min)
+        local score_max  = r(max)
 
         if "`cluster_var'" != "" {
             confirm numeric variable `cluster_var'
@@ -222,32 +234,34 @@ program define grf_get_scores, rclass
 
         /* Display results */
         display as text ""
-        display as text "Causal Survival IPCW Doubly-Robust Scores"
+        display as text "Causal Survival Doubly-Robust Scores"
         display as text "{hline 55}"
         display as text "Forest type:           " as result "causal_survival"
         display as text "Nuisance mode:         " as result cond("`nuisance_mode'"=="", "unspecified", "`nuisance_mode'")
         display as text "Observations:          " as result `n_scores'
+        display as text "V.hat source:          " as result "`vhat_source'"
+        display as text "E[V.hat]:              " as result %12.6f `vhat_mean'
         display as text "E[denominator]:        " as result %12.6f `denom_mean'
         display as text "{hline 55}"
         display as text ""
-        display as text "Summary of IPCW DR scores (`generate'):"
+        display as text "Summary of DR scores (`generate'):"
         display as text "  Mean:         " as result %12.6f `score_mean'
         display as text "  Std. Dev.:    " as result %12.6f `score_sd'
         display as text "  Std. Err.:    " as result %12.6f `score_se'
         display as text "  Min:          " as result %12.6f `score_min'
         display as text "  Max:          " as result %12.6f `score_max'
         display as text ""
-        display as text "Note: scores use stored IPCW nuisance moments (numerator/denominator)."
-        display as text ""
 
         /* Store results */
-        return scalar N        = `n_scores'
-        return scalar mean     = `score_mean'
-        return scalar sd       = `score_sd'
-        return scalar se       = `score_se'
-        return scalar min      = `score_min'
-        return scalar max      = `score_max'
+        return scalar N          = `n_scores'
+        return scalar mean       = `score_mean'
+        return scalar sd         = `score_sd'
+        return scalar se         = `score_se'
+        return scalar min        = `score_min'
+        return scalar max        = `score_max'
         return scalar denom_mean = `denom_mean'
+        return scalar vhat_mean  = `vhat_mean'
+        return local  vhat_source "`vhat_source'"
         return local  generate   "`generate'"
         return local  forest_type "causal_survival"
         exit
