@@ -166,7 +166,8 @@ static void set_data_indices(grf::Data& d, int y_start, int n_y,
  *   Quantile: [23]=quantiles (comma-separated, e.g. "0.1,0.5,0.9")
  *   Instrumental: [23]=reduced_form_weight (double), [24]=stabilize_splits
  *   Probability: [23]=num_classes (int)
- *   Survival: [23]=num_failures (int), [24]=prediction_type (int)
+ *   Survival: [23]=num_failures (int), [24]=prediction_type (int),
+ *             [25]=fast_logrank (int), [26]=failure_times_csv (optional)
  *   Causal Survival: [23]=stabilize_splits (int), [24-26]=col indices,
  *                    [27]=target (int: 1=RMST, 2=survival probability)
  *   Multi-arm Causal: [23]=stabilize_splits (int)
@@ -795,6 +796,7 @@ extern "C" STDLL stata_call(int argc, char *argv[])
         int num_failures_arg = (argc > 23) ? parse_int(argv[23], 0) : 0;
         int prediction_type = (argc > 24) ? parse_int(argv[24], 0) : 0;
         bool fast_logrank = (argc > 25) ? (parse_int(argv[25], 1) != 0) : true;
+        std::string failure_times_csv = (argc > 26 && argv[26]) ? argv[26] : "";
 
         /* Set censor index: it's at position n_x + n_y (assuming n_y=1 for time) */
         /* Layout: X(0..n_x-1) time(n_x) censor(n_x+1)
@@ -813,9 +815,27 @@ extern "C" STDLL stata_call(int argc, char *argv[])
          * In predict mode, only TRAINING rows (0..n_train-1) are used to
          * build the failure time set, but ALL rows are relabeled.
          */
-        int n_relabel_src = predict_mode ? n_train : n;
         std::vector<double> failure_times_vec;
-        {
+        if (!failure_times_csv.empty()) {
+            std::stringstream ss(failure_times_csv);
+            std::string tok;
+            while (std::getline(ss, tok, ',')) {
+                if (tok.empty()) continue;
+                double t = atof(tok.c_str());
+                if (std::isfinite(t) && t > 0.0) {
+                    failure_times_vec.push_back(t);
+                }
+            }
+            std::sort(failure_times_vec.begin(), failure_times_vec.end());
+            failure_times_vec.erase(
+                std::unique(failure_times_vec.begin(), failure_times_vec.end()),
+                failure_times_vec.end());
+            if (failure_times_vec.empty()) {
+                SF_error("GRF error: failure_times_csv parsed to empty grid.\n");
+                return 198;
+            }
+        } else {
+            int n_relabel_src = predict_mode ? n_train : n;
             std::set<double> ft_set;
             for (int i = 0; i < n_relabel_src; i++) {
                 double t = data_vec[(size_t)y_start * n + i];
@@ -828,8 +848,8 @@ extern "C" STDLL stata_call(int argc, char *argv[])
         }
         int num_failures = (int)failure_times_vec.size();
         if (num_failures <= 0) num_failures = 1;
-        /* If user requested fewer failure times, subsample evenly */
-        if (num_failures_arg > 0 && num_failures_arg < num_failures) {
+        /* If user requested fewer failure times (without explicit grid), subsample evenly */
+        if (failure_times_csv.empty() && num_failures_arg > 0 && num_failures_arg < num_failures) {
             std::vector<double> subsampled;
             subsampled.reserve(num_failures_arg);
             for (int k = 0; k < num_failures_arg; k++) {

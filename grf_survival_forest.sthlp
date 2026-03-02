@@ -31,12 +31,13 @@
 {synopt:{opt gen:erate(stub)}}stub for output variables; creates {it:stub}{cmd:_s1}, {it:stub}{cmd:_s2}, ...{p_end}
 
 {syntab:Survival}
-{synopt:{opt pred:type(#)}}0 = Kaplan-Meier, 1 = Nelson-Aalen; default is {cmd:1}{p_end}
+{synopt:{opt pred:type(#)}}0 = Nelson-Aalen, 1 = Kaplan-Meier; default is {cmd:1}{p_end}
 {synopt:{opt nout:put(#)}}number of failure-time columns; default is {cmd:20}{p_end}
+{synopt:{opt failuretimes(string)}}explicit failure-time grid as numlist or numeric variable{p_end}
 {synopt:{opt numf:ailures(#)}}expected number of unique failure times; default {cmd:0} (auto-detect){p_end}
 
 {syntab:Forest tuning}
-{synopt:{opt nt:rees(#)}}number of trees; default is {cmd:2000}{p_end}
+{synopt:{opt nt:rees(#)}}number of trees; default is {cmd:1000}{p_end}
 {synopt:{opt seed(#)}}random seed; default is {cmd:42}{p_end}
 {synopt:{opt mtry(#)}}variables to consider at each split; default {cmd:0} (auto){p_end}
 {synopt:{opt minn:odesize(#)}}minimum leaf size; default is {cmd:15}{p_end}
@@ -74,8 +75,9 @@ The command generates {opt noutput()} variables named {it:stub}{cmd:_s1},
 {it:stub}{cmd:_s2}, ..., {it:stub}{cmd:_s}{it:N}, where each variable contains
 the estimated survival probability at the corresponding failure time. The
 failure times are the unique observed event times from the data (or an
-evenly-spaced grid if {opt noutput()} is fewer than the number of unique
-failure times).
+subsampled grid if {opt noutput()} is fewer than the number of unique
+failure times). When {opt failuretimes()} is supplied, that explicit grid is
+used and {opt noutput()} is overridden to match its length.
 
 {marker options}{...}
 {title:Options}
@@ -90,13 +92,18 @@ set by {opt noutput()}.
 {dlgtab:Survival}
 
 {phang}
-{opt predtype(#)} selects the survival estimator: {cmd:0} for Kaplan-Meier and
-{cmd:1} for Nelson-Aalen (the default). Nelson-Aalen is generally preferred for
-its smoothness properties.
+{opt predtype(#)} selects the survival estimator: {cmd:0} for Nelson-Aalen and
+{cmd:1} for Kaplan-Meier (the default).
 
 {phang}
 {opt noutput(#)} sets the number of failure-time grid points at which the
 survival curve is evaluated. Default is {cmd:20}.
+
+{phang}
+{opt failuretimes(string)} supplies an explicit failure-time grid. You may pass
+either a numlist (for example {cmd:failuretimes(1 2 3 5)}) or a numeric
+variable name containing grid values. Grid values must be strictly positive.
+When specified, {cmd:noutput()} is overridden to match the grid length.
 
 {phang}
 {opt numfailures(#)} provides a hint for the number of unique failure times.
@@ -161,6 +168,9 @@ that contain no estimation-sample observations. Pruning is enabled by default.
 {pstd}Kaplan-Meier estimator with more time points:{p_end}
 {phang2}{cmd:. grf_survival_forest time status x1 x2, gen(surv_km) predtype(0) noutput(50)}{p_end}
 
+{pstd}Explicit failure-time grid:{p_end}
+{phang2}{cmd:. grf_survival_forest time status x1 x2, gen(surv_grid) failuretimes(0.5 1 2 4 8)}{p_end}
+
 {pstd}Compare survival curves for two groups:{p_end}
 {phang2}{cmd:. grf_survival_forest time status x1 x2, gen(sf) replace}{p_end}
 {phang2}{cmd:. sum sf_s10 if x1 > 0}{p_end}
@@ -193,6 +203,7 @@ that contain no estimation-sample observations. Pruning is enabled by default.
 {synopt:{cmd:e(statusvar)}}censoring indicator variable name{p_end}
 {synopt:{cmd:e(indepvars)}}predictor variable names{p_end}
 {synopt:{cmd:e(predict_stub)}}output variable stub name{p_end}
+{synopt:{cmd:e(failure_times)}}explicit failure-time grid if {cmd:failuretimes()} was supplied{p_end}
 
 {marker references}{...}
 {title:References}

@@ -385,6 +385,17 @@ program define grf_instrumental_forest, eclass
 
     display as text "  Centering complete."
 
+    /* Persist canonical nuisance variables for post-estimation commands. */
+    capture drop _grf_if_yhat
+    capture drop _grf_if_what
+    capture drop _grf_if_zhat
+    quietly gen double _grf_if_yhat = `Y_hat'
+    quietly gen double _grf_if_what = `W_hat'
+    quietly gen double _grf_if_zhat = `Z_hat'
+    label variable _grf_if_yhat "Y.hat = E[Y|X] (instrumental nuisance)"
+    label variable _grf_if_what "W.hat = E[W|X] (instrumental nuisance)"
+    label variable _grf_if_zhat "Z.hat = E[Z|X] (instrumental nuisance)"
+
     /* ---- Save nuisance estimates if requested ---- */
     if "`yhatgenerate'" != "" {
         if "`replace'" != "" {
@@ -483,6 +494,11 @@ program define grf_instrumental_forest, eclass
 
     /* ---- Store results ---- */
     ereturn clear
+    capture scalar __grf_model_counter = __grf_model_counter + 1
+    if _rc {
+        scalar __grf_model_counter = 1
+    }
+    ereturn scalar model_id = __grf_model_counter
     ereturn scalar N                  = `n_use'
     ereturn scalar n_trees            = `ntrees'
     ereturn scalar seed               = `seed'
@@ -514,14 +530,17 @@ program define grf_instrumental_forest, eclass
     if "`weight_var'" != "" {
         ereturn local weight_var "`weight_var'"
     }
+    ereturn local yhat_var "_grf_if_yhat"
+    ereturn local what_var "_grf_if_what"
+    ereturn local zhat_var "_grf_if_zhat"
     if "`yhatgenerate'" != "" {
-        ereturn local yhat_var "`yhatgenerate'"
+        ereturn local yhat_user_var "`yhatgenerate'"
     }
     if "`whatgenerate'" != "" {
-        ereturn local what_var "`whatgenerate'"
+        ereturn local what_user_var "`whatgenerate'"
     }
     if "`zhatgenerate'" != "" {
-        ereturn local zhat_var "`zhatgenerate'"
+        ereturn local zhat_user_var "`zhatgenerate'"
     }
     if "`yhatinput'" != "" {
         ereturn local yhat_input "`yhatinput'"

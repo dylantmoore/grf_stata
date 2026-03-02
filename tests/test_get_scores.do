@@ -158,6 +158,74 @@ else {
     display as result "PASS: grf_get_scores score properties (mean ~ ATE)"
 }
 
+* ---- Test 8: multi-arm causal forest DR scores ----
+capture noisily {
+    gen arm = mod(_n, 3)
+    gen w_arm1 = (arm == 1)
+    gen w_arm2 = (arm == 2)
+    gen y_ma = 1 + 0.5*x1 + w_arm1*(1 + x2) + w_arm2*(0.5 - x3) + rnormal()
+
+    grf_multi_arm_causal_forest y_ma w_arm1 w_arm2 x1-x5, ///
+        gen(ma_tau) ntreat(2) ntrees(100) seed(42)
+    grf_get_scores, gen(ma_score)
+
+    assert r(n_treat) == 2
+    quietly count if !missing(ma_score_t1)
+    assert r(N) > 0
+    quietly count if !missing(ma_score_t2)
+    assert r(N) > 0
+
+    * Means should be in the same ballpark as stored arm-level ATE summaries
+    local ate1 = e(ate_1)
+    local ate2 = e(ate_2)
+    quietly summarize ma_score_t1
+    assert abs(r(mean) - `ate1') < 2
+    quietly summarize ma_score_t2
+    assert abs(r(mean) - `ate2') < 2
+
+    drop arm w_arm1 w_arm2 y_ma ma_tau_t1 ma_tau_t2 ma_score_t1 ma_score_t2
+    capture drop _grf_mac_yhat _grf_mac_what1 _grf_mac_what2
+}
+if _rc {
+    display as error "FAIL: grf_get_scores multi-arm causal forest"
+    local errors = `errors' + 1
+}
+else {
+    display as result "PASS: grf_get_scores multi-arm causal forest"
+}
+
+* ---- Test 9: causal survival IPCW/DR scores ----
+capture noisily {
+    gen w_cs = (x1 + rnormal() > 0)
+    gen time_cs = exp(0.4*x1 - 0.2*w_cs + rnormal())
+    gen status_cs = (runiform() > 0.3)
+
+    grf_causal_survival_forest time_cs status_cs w_cs x1-x5, ///
+        gen(cs_tau) ntrees(100) seed(42) horizon(2.5)
+
+    assert "`e(numer_var)'" == "_grf_cs_numer"
+    assert "`e(denom_var)'" == "_grf_cs_denom"
+
+    grf_get_scores, gen(cs_scores)
+    assert !missing(r(denom_mean))
+    assert r(sd) > 0
+
+    * Score path should include IPCW correction, not just raw tau.
+    gen double cs_abs_diff = abs(cs_scores - cs_tau)
+    quietly summarize cs_abs_diff
+    assert r(max) > 1e-10
+
+    drop w_cs time_cs status_cs cs_tau cs_scores cs_abs_diff
+    capture drop _grf_cs_what _grf_cs_numer _grf_cs_denom _grf_cs_yhat _grf_cs_chat
+}
+if _rc {
+    display as error "FAIL: grf_get_scores causal survival forest"
+    local errors = `errors' + 1
+}
+else {
+    display as result "PASS: grf_get_scores causal survival forest"
+}
+
 * ============================================================
 * Summary
 * ============================================================

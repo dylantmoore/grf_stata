@@ -15,6 +15,7 @@ program define grf_rate, rclass
             Quantiles(numlist >0 <=1)   ///
             BOOTstrap(integer 200)      ///
             CATEvar(varname numeric)    ///
+            SUBset(varname numeric)     ///
             COMPliancescore(varname numeric) ///
             DEBIASINGweights(varname numeric) ///
             SEED(integer -1)            ///
@@ -112,6 +113,11 @@ program define grf_rate, rclass
     if "`compliancescore'" != "" {
         markout `touse' `compliancescore'
     }
+    if "`subset'" != "" {
+        confirm numeric variable `subset'
+        markout `touse' `subset'
+        quietly replace `touse' = 0 if `touse' & `subset' == 0
+    }
     quietly count if `touse'
     local n_use = r(N)
 
@@ -191,6 +197,9 @@ program define grf_rate, rclass
     display as text "Priorities variable:   " as result "`priorities'"
     display as text "CATE variable:         " as result "`tauvar'"
     display as text "Scoring:               " as result "`score_label'"
+    if "`subset'" != "" {
+        display as text "Subset variable:       " as result "`subset'"
+    }
     if "`compliancescore'" != "" {
         display as text "Compliance score:      " as result "`compliancescore'"
     }
@@ -287,6 +296,7 @@ program define grf_rate, rclass
         /* Generate bootstrap weights (Poisson bootstrap for speed) */
         /* Each obs gets a Poisson(1) weight -- equivalent to multinomial resampling */
         quietly {
+            sort `orig_order'
             capture drop `bs_weight'
             gen long `bs_weight' = rpoisson(1) if `touse'
 
@@ -307,7 +317,7 @@ program define grf_rate, rclass
             /* Sort by priorities descending to compute cumulative weight fractions */
             tempvar sort_key cum_wt frac_wt
             gen double `sort_key' = -`priorities' if `touse' & `bs_weight' > 0
-            sort `sort_key'
+            sort `sort_key' `orig_order'
 
             gen double `cum_wt' = sum(`bs_weight') if `touse' & `bs_weight' > 0
             gen double `frac_wt' = `cum_wt' / `bs_n' if `touse' & `bs_weight' > 0
@@ -421,6 +431,9 @@ program define grf_rate, rclass
     return local  target        "`target'"
     return local  priorities    "`priorities'"
     return local  catevar       "`tauvar'"
+    if "`subset'" != "" {
+        return local subset_var "`subset'"
+    }
     if "`compliancescore'" != "" {
         return local compliance_score_var "`compliancescore'"
     }

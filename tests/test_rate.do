@@ -66,6 +66,27 @@ display as text "  AUTOC with x1 priorities: " as result %8.4f r(estimate)
 
 display as text "  PASSED"
 
+* ---- Test 4: subset() matches if restriction ----
+display as text ""
+display as text "--- Test 4: subset() alias ---"
+
+gen byte keep_subset = (x1 > 0)
+grf_rate cate, target(AUTOC) bootstrap(50) seed(42) subset(keep_subset)
+local est_subset = r(estimate)
+local se_subset = r(std_err)
+assert "`r(subset_var)'" == "keep_subset"
+
+grf_rate cate if keep_subset, target(AUTOC) bootstrap(50) seed(42)
+local est_if = r(estimate)
+local se_if = r(std_err)
+
+assert reldif(`est_subset', `est_if') < 1e-10
+assert reldif(`se_subset', `se_if') < 1e-10
+
+display as text "  subset estimate: " as result %8.4f `est_subset'
+display as text "  if-estimate:     " as result %8.4f `est_if'
+display as text "  PASSED"
+
 * ---- Summary ----
 display as text ""
 display as text "=============================================="

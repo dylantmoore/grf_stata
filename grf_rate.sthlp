@@ -27,6 +27,9 @@
 {synopt:{opt quantiles(numlist)}}quantile grid for TOC integration; default {cmd:0.1(0.1)1.0}{p_end}
 {synopt:{opt bootstrap(#)}}number of bootstrap replications; default {cmd:200}{p_end}
 {synopt:{opt catevar(varname)}}variable containing CATE estimates; reads from {cmd:e()} if omitted{p_end}
+{synopt:{opt subset(varname)}}binary/indicator subset mask; 0 excludes observation{p_end}
+{synopt:{opt compliancescore(varname)}}optional compliance-score weights for IV-style RATE{p_end}
+{synopt:{opt debiasingweights(varname)}}optional debiasing weights applied to score variable{p_end}
 {synopt:{opt seed(#)}}random number seed; default {cmd:-1} (no seed){p_end}
 {synoptline}
 
@@ -77,6 +80,18 @@ If omitted, {cmd:grf_rate} reads {cmd:e(predict_var)} from a prior
 {cmd:grf_causal_forest} estimation.
 
 {phang}
+{opt subset(varname)} restricts RATE computation to observations where
+{it:varname} is nonzero. This mirrors R's {cmd:subset} behavior.
+
+{phang}
+{opt compliancescore(varname)} multiplies the score variable by the supplied
+compliance score before ranking/integration.
+
+{phang}
+{opt debiasingweights(varname)} multiplies the score variable by the supplied
+weights before RATE integration.
+
+{phang}
 {opt seed(#)} sets the random number seed.  Default {cmd:-1} does not
 set a seed.
 
@@ -91,6 +106,11 @@ set a seed.
 {pstd}Use QINI target with a custom priorities variable:{p_end}
 
 {phang2}{cmd:. grf_rate my_score, target(QINI) catevar(tau) bootstrap(500)}{p_end}
+
+{pstd}Use a subset mask equivalent to {cmd:if}: {p_end}
+
+{phang2}{cmd:. gen keep = (x1 > 0)}{p_end}
+{phang2}{cmd:. grf_rate tau, subset(keep)}{p_end}
 
 {marker results}{...}
 {title:Stored results}
@@ -111,6 +131,8 @@ set a seed.
 {synopt:{cmd:r(target)}}{cmd:AUTOC} or {cmd:QINI}{p_end}
 {synopt:{cmd:r(priorities)}}name of the priorities variable{p_end}
 {synopt:{cmd:r(catevar)}}name of the CATE variable{p_end}
+{synopt:{cmd:r(subset_var)}}name of subset variable, if specified{p_end}
+{synopt:{cmd:r(compliance_score_var)}}name of compliance score variable, if specified{p_end}
 
 {title:References}
 

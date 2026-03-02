@@ -50,6 +50,7 @@
 
 {syntab:Local linear}
 {synopt:{opt llsplit}}enable local linear splits (experimental){p_end}
+{synopt:{opt llvars(varlist)}}restrict local-linear split variables to a subset of predictors{p_end}
 {synopt:{opt lll:ambda(#)}}ridge penalty for local linear correction; default is {cmd:lllambda(0.1)}{p_end}
 {synopt:{opt llw:eightpenalty}}use covariance-weighted ridge penalty{p_end}
 {synopt:{opt llc:utoff(#)}}leaf size below which global beta is used; default is {cmd:llcutoff(}{it:sqrt(n)}{cmd:)}{p_end}
@@ -159,6 +160,11 @@ CART splits are used and the local linear correction is applied only at
 prediction time.
 
 {phang}
+{opt llvars(varlist)} restricts local-linear split variables to the listed
+predictors. Variable names must be present in the forest predictor list.
+Specifying {cmd:llvars()} implicitly enables local-linear split mode.
+
+{phang}
 {opt lllambda(#)} sets the ridge penalty for the local linear regression
 correction. Larger values shrink the local linear coefficients toward zero,
 producing predictions closer to the standard forest. Default is 0.1.
@@ -211,8 +217,11 @@ used for variance estimation. Default is 1; forced to at least 2 when
 {pstd}With local linear splits enabled{p_end}
 {phang2}{cmd:. grf_ll_regression_forest price mpg weight, gen(yhat3) llsplit replace}{p_end}
 
+{pstd}Restrict local-linear split variables to a subset{p_end}
+{phang2}{cmd:. grf_ll_regression_forest price mpg weight length, gen(yhat4) llvars(mpg weight) replace}{p_end}
+
 {pstd}With variance estimation{p_end}
-{phang2}{cmd:. grf_ll_regression_forest price mpg weight length, gen(yhat4) estimatevariance ntrees(500) replace}{p_end}
+{phang2}{cmd:. grf_ll_regression_forest price mpg weight length, gen(yhat5) estimatevariance ntrees(500) replace}{p_end}
 
 {marker results}{...}
 {title:Stored results}

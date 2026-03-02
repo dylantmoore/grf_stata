@@ -134,10 +134,10 @@ display as text "  PASSED"
 display as text ""
 display as text "--- Test 4: Fidelity vs R reference ---"
 
-capture confirm file "tests/ref/quantile_input.csv"
+capture confirm file "ref/quantile_input.csv"
 if _rc == 0 {
     clear
-    import delimited "tests/ref/quantile_input.csv", clear
+    import delimited "ref/quantile_input.csv", clear
 
     * Run quantile forest on same data with matching quantiles
     * R uses quantiles: 0.1, 0.25, 0.5, 0.75, 0.9
@@ -148,7 +148,7 @@ if _rc == 0 {
     * R columns after import: q01, q025, q05, q075, q09
     * (dots in q0.1 etc. are stripped by Stata import)
     preserve
-    import delimited "tests/ref/quantile_output.csv", clear
+    import delimited "ref/quantile_output.csv", clear
     rename q01 r_q10
     rename q025 r_q25
     rename q05 r_q50
@@ -189,7 +189,7 @@ if _rc == 0 {
     }
 }
 else {
-    display as text "  Skipped (no reference data at tests/ref/quantile_input.csv)"
+    display as text "  Skipped (no reference data at ref/quantile_input.csv)"
     display as text "  Run: Rscript tests/generate_reference.R"
 }
 

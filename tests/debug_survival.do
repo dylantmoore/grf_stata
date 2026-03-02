@@ -3,7 +3,7 @@ clear all
 set more off
 
 * Load same data R used
-import delimited "tests/ref/survival_input.csv", clear
+import delimited "ref/survival_input.csv", clear
 describe
 summarize time status
 
@@ -16,7 +16,7 @@ list stata_surv_s1 stata_surv_s2 stata_surv_s3 in 1/5
 
 * Load R predictions
 preserve
-import delimited "tests/ref/survival_output.csv", clear
+import delimited "ref/survival_output.csv", clear
 list t1 t2 t3 in 1/5
 * Summary of R columns
 summarize t1 t2 t3
@@ -24,7 +24,7 @@ restore
 
 * Merge and compare
 preserve
-import delimited "tests/ref/survival_output.csv", clear
+import delimited "ref/survival_output.csv", clear
 gen n = _n
 tempfile rref
 save `rref'

@@ -353,6 +353,64 @@ else {
     display as result "PASS: default e() values"
 }
 
+* ---- Test 21: user-supplied nuisance hooks (whatinput/yhatinput/chatinput) ----
+capture noisily {
+    gen double what_in = min(max(0.5 + 0.2*x1, 0.01), 0.99)
+    gen double yhat_in = min(time, 4)
+    gen double chat_in = 0.8
+
+    grf_causal_survival_forest time status treat x1-x5, gen(cs21) ntrees(100) seed(42) ///
+        horizon(4) whatinput(what_in) yhatinput(yhat_in) chatinput(chat_in)
+
+    assert !missing(cs21) in 1
+    assert "`e(what_var)'" == "_grf_cs_what"
+    assert "`e(yhat_var)'" == "_grf_cs_yhat"
+    assert "`e(chat_var)'" == "_grf_cs_chat"
+    assert "`e(numer_var)'" == "_grf_cs_numer"
+    assert "`e(denom_var)'" == "_grf_cs_denom"
+    assert "`e(nuisance_mode)'" == "estimated_ipcw"
+    assert !missing(_grf_cs_yhat) in 1
+    assert !missing(_grf_cs_chat) in 1
+
+    drop cs21 what_in yhat_in chat_in ///
+        _grf_cs_what _grf_cs_numer _grf_cs_denom _grf_cs_yhat _grf_cs_chat
+}
+if _rc {
+    display as error "FAIL: user-supplied nuisance hooks"
+    local errors = `errors' + 1
+}
+else {
+    display as result "PASS: user-supplied nuisance hooks"
+}
+
+* ---- Test 22: precomputed numer/denom mode with explicit nuisance ----
+capture noisily {
+    gen double what_pre = min(max(0.5 + 0.2*x2, 0.01), 0.99)
+    gen double numer_pre = (treat - what_pre) * status * min(time, 3)
+    gen double denom_pre = (treat - what_pre)^2 + 1e-4
+
+    grf_causal_survival_forest time status treat x1-x5, gen(cs22) ntrees(100) seed(42) ///
+        horizon(3) numer(numer_pre) denom(denom_pre) whatinput(what_pre)
+
+    assert !missing(cs22) in 1
+    assert "`e(nuisance_mode)'" == "precomputed_numer_denom"
+    assert "`e(numer_var)'" == "_grf_cs_numer"
+    assert "`e(denom_var)'" == "_grf_cs_denom"
+    assert !missing(_grf_cs_numer) in 1
+    assert !missing(_grf_cs_denom) in 1
+
+    drop cs22 what_pre numer_pre denom_pre ///
+        _grf_cs_what _grf_cs_numer _grf_cs_denom
+    capture drop _grf_cs_yhat _grf_cs_chat
+}
+if _rc {
+    display as error "FAIL: precomputed numer/denom mode"
+    local errors = `errors' + 1
+}
+else {
+    display as result "PASS: precomputed numer/denom mode"
+}
+
 * ============================================================
 * Summary
 * ============================================================

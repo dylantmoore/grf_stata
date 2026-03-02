@@ -1,12 +1,13 @@
 *! grf_causal_survival_forest.ado -- Causal Survival Forest via grf C++ library
-*! Version 0.1.0
+*! Version 0.2.0
 *! Implements Cui et al. (2023) causal_survival_forest()
 *!
 *! NOTE: Full implementation requires a multi-step nuisance estimation pipeline
 *! (survival forest for S.hat, regression forests for censoring/treatment models).
-*! This version supports two modes:
-*!   1. Simplified: pre-computed nuisance columns supplied via numer()/denom()
-*!   2. Auto pipeline: internal estimation (default, calls survival + regression forests)
+*! This version supports:
+*!   1. Pre-computed nuisance columns via numer()/denom()
+*!   2. Auto IPCW nuisance pipeline (default)
+*!   3. Partial user nuisance overrides via whatinput()/yhatinput()/chatinput()
 
 program define grf_causal_survival_forest, eclass
     version 14.0
@@ -31,6 +32,8 @@ program define grf_causal_survival_forest, eclass
             NUMer(varname numeric)             ///
             DENom(varname numeric)             ///
             WHATinput(varname numeric)         ///
+            YHATinput(varname numeric)         ///
+            CHATinput(varname numeric)         ///
             HORizon(real 0)                    ///
             TARget(integer 1)                  ///
             REPlace                            ///
@@ -43,6 +46,12 @@ program define grf_causal_survival_forest, eclass
             TUNENumtrees(integer 200)          ///
             TUNENumreps(integer 50)            ///
         ]
+
+    /* ---- Validate nuisance-input combinations ---- */
+    if ("`numer'" != "" & "`denom'" == "") | ("`numer'" == "" & "`denom'" != "") {
+        display as error "numer() and denom() must be supplied together"
+        exit 198
+    }
 
     /* ---- Parse honesty ---- */
     local do_honesty 1
@@ -125,6 +134,20 @@ program define grf_causal_survival_forest, eclass
     else {
         marksample touse
     }
+
+    if "`numer'" != "" {
+        markout `touse' `numer' `denom'
+    }
+    if "`whatinput'" != "" {
+        markout `touse' `whatinput'
+    }
+    if "`yhatinput'" != "" {
+        markout `touse' `yhatinput'
+    }
+    if "`chatinput'" != "" {
+        markout `touse' `chatinput'
+    }
+
     quietly count if `touse'
     local n_use = r(N)
 
@@ -270,8 +293,12 @@ program define grf_causal_survival_forest, eclass
      */
 
     local precomputed 0
+    local nuisance_mode "auto"
+    local yhat_source ""
+    local chat_source ""
     if "`numer'" != "" & "`denom'" != "" {
         local precomputed 1
+        local nuisance_mode "precomputed_numer_denom"
         display as text "Using pre-computed nuisance columns:"
         display as text "  Numerator: `numer'"
         display as text "  Denominator: `denom'"
@@ -358,9 +385,6 @@ program define grf_causal_survival_forest, eclass
 
         /* Fit censoring forest on (X, W, T, 1-D) with reduced trees */
         local nuis_trees = max(50, min(`ntrees' / 4, 500))
-        tempvar chat_out
-        quietly gen double `chat_out' = .
-
         /* Use regression forest to estimate E[T|X,W] as Y.hat proxy */
         tempvar yhat
         quietly gen double `yhat' = .
@@ -375,62 +399,78 @@ program define grf_causal_survival_forest, eclass
             quietly gen double `fY' = min(`timevar', `horizon') if `touse'
         }
 
-        /* Fit Y.hat = E[f(Y)|X] using regression forest on uncensored obs */
-        plugin call grf_plugin `indepvars' `fY' `extra_vars' `yhat' ///
-            if `touse',                                            ///
-            "regression"                                           ///
-            "`nuis_trees'"                                         ///
-            "`seed'"                                               ///
-            "`mtry'"                                               ///
-            "15"                                                   ///
-            "`samplefrac'"                                         ///
-            "`do_honesty'"                                         ///
-            "`honestyfrac'"                                        ///
-            "`do_honesty_prune'"                                   ///
-            "`alpha'"                                              ///
-            "`imbalancepenalty'"                                    ///
-            "1"                                                    ///
-            "`numthreads'"                                         ///
-            "0"                                                    ///
-            "0"                                                    ///
-            "`nindep'"                                             ///
-            "1"                                                    ///
-            "0"                                                    ///
-            "0"                                                    ///
-            "1"                                                    ///
-            "`allow_missing_x'"                                    ///
-            "`_nuis_cluster_idx'"                                  ///
-            "`_nuis_weight_idx'"
+        if "`yhatinput'" != "" {
+            display as text "  Using user-supplied Y.hat from `yhatinput'"
+            quietly replace `yhat' = `yhatinput' if `touse'
+            local yhat_source "`yhatinput'"
+        }
+        else {
+            /* Fit Y.hat = E[f(Y)|X] using regression forest on uncensored obs */
+            plugin call grf_plugin `indepvars' `fY' `extra_vars' `yhat' ///
+                if `touse',                                            ///
+                "regression"                                           ///
+                "`nuis_trees'"                                         ///
+                "`seed'"                                               ///
+                "`mtry'"                                               ///
+                "15"                                                   ///
+                "`samplefrac'"                                         ///
+                "`do_honesty'"                                         ///
+                "`honestyfrac'"                                        ///
+                "`do_honesty_prune'"                                   ///
+                "`alpha'"                                              ///
+                "`imbalancepenalty'"                                    ///
+                "1"                                                    ///
+                "`numthreads'"                                         ///
+                "0"                                                    ///
+                "0"                                                    ///
+                "`nindep'"                                             ///
+                "1"                                                    ///
+                "0"                                                    ///
+                "0"                                                    ///
+                "1"                                                    ///
+                "`allow_missing_x'"                                    ///
+                "`_nuis_cluster_idx'"                                  ///
+                "`_nuis_weight_idx'"
+            local yhat_source "`yhat'"
+        }
 
         /* Fit censoring regression: E[D|X,W] as proxy for C.hat(T|X,W) */
         tempvar chat_proxy
         quietly gen double `chat_proxy' = .
 
-        plugin call grf_plugin `indepvars' `statusvar' `extra_vars' `chat_proxy' ///
-            if `touse',                                            ///
-            "regression"                                           ///
-            "`nuis_trees'"                                         ///
-            "`seed'"                                               ///
-            "`mtry'"                                               ///
-            "15"                                                   ///
-            "`samplefrac'"                                         ///
-            "`do_honesty'"                                         ///
-            "`honestyfrac'"                                        ///
-            "`do_honesty_prune'"                                   ///
-            "`alpha'"                                              ///
-            "`imbalancepenalty'"                                    ///
-            "1"                                                    ///
-            "`numthreads'"                                         ///
-            "0"                                                    ///
-            "0"                                                    ///
-            "`nindep'"                                             ///
-            "1"                                                    ///
-            "0"                                                    ///
-            "0"                                                    ///
-            "1"                                                    ///
-            "`allow_missing_x'"                                    ///
-            "`_nuis_cluster_idx'"                                  ///
-            "`_nuis_weight_idx'"
+        if "`chatinput'" != "" {
+            display as text "  Using user-supplied C.hat from `chatinput'"
+            quietly replace `chat_proxy' = `chatinput' if `touse'
+            local chat_source "`chatinput'"
+        }
+        else {
+            plugin call grf_plugin `indepvars' `statusvar' `extra_vars' `chat_proxy' ///
+                if `touse',                                            ///
+                "regression"                                           ///
+                "`nuis_trees'"                                         ///
+                "`seed'"                                               ///
+                "`mtry'"                                               ///
+                "15"                                                   ///
+                "`samplefrac'"                                         ///
+                "`do_honesty'"                                         ///
+                "`honestyfrac'"                                        ///
+                "`do_honesty_prune'"                                   ///
+                "`alpha'"                                              ///
+                "`imbalancepenalty'"                                    ///
+                "1"                                                    ///
+                "`numthreads'"                                         ///
+                "0"                                                    ///
+                "0"                                                    ///
+                "`nindep'"                                             ///
+                "1"                                                    ///
+                "0"                                                    ///
+                "0"                                                    ///
+                "1"                                                    ///
+                "`allow_missing_x'"                                    ///
+                "`_nuis_cluster_idx'"                                  ///
+                "`_nuis_weight_idx'"
+            local chat_source "`chat_proxy'"
+        }
 
         /* C.hat proxy = P(not censored | X,W) = E[D|X,W]
          * Clip to [0.001, 1.0] for numerical stability */
@@ -464,6 +504,7 @@ program define grf_causal_survival_forest, eclass
 
         local numer `cs_numer'
         local denom `cs_denom'
+        local nuisance_mode "estimated_ipcw"
     }
     else {
         display as text "Steps 1-3: Skipped (using pre-computed nuisance columns)."
@@ -502,6 +543,13 @@ program define grf_causal_survival_forest, eclass
                 "`allow_missing_x'"                               ///
                 "`_nuis_cluster_idx'"                             ///
                 "`_nuis_weight_idx'"
+        }
+
+        if "`yhatinput'" != "" {
+            local yhat_source "`yhatinput'"
+        }
+        if "`chatinput'" != "" {
+            local chat_source "`chatinput'"
         }
     }
 
@@ -544,6 +592,26 @@ program define grf_causal_survival_forest, eclass
     capture drop _grf_cs_what
     quietly gen double _grf_cs_what = `what'
     label variable _grf_cs_what "W.hat from propensity regression (W ~ X)"
+
+    capture drop _grf_cs_numer
+    quietly gen double _grf_cs_numer = `numer' if `touse'
+    label variable _grf_cs_numer "Causal-survival IPCW numerator"
+
+    capture drop _grf_cs_denom
+    quietly gen double _grf_cs_denom = `denom' if `touse'
+    label variable _grf_cs_denom "Causal-survival IPCW denominator"
+
+    capture drop _grf_cs_yhat
+    if "`yhat_source'" != "" {
+        quietly gen double _grf_cs_yhat = `yhat_source' if `touse'
+        label variable _grf_cs_yhat "Y.hat nuisance used by causal-survival wrapper"
+    }
+
+    capture drop _grf_cs_chat
+    if "`chat_source'" != "" {
+        quietly gen double _grf_cs_chat = `chat_source' if `touse'
+        label variable _grf_cs_chat "C.hat nuisance used by causal-survival wrapper"
+    }
 
     /* ---- Call plugin for causal survival forest ----
      *
@@ -607,6 +675,11 @@ program define grf_causal_survival_forest, eclass
 
     /* ---- Store results ---- */
     ereturn clear
+    capture scalar __grf_model_counter = __grf_model_counter + 1
+    if _rc {
+        scalar __grf_model_counter = 1
+    }
+    ereturn scalar model_id = __grf_model_counter
     ereturn scalar N           = `n_use'
     ereturn scalar n_events    = `n_events'
     ereturn scalar n_censored  = `n_censored'
@@ -638,6 +711,15 @@ program define grf_causal_survival_forest, eclass
         ereturn local variance_var "`vargenerate'"
     }
     ereturn local what_var   "_grf_cs_what"
+    ereturn local numer_var  "_grf_cs_numer"
+    ereturn local denom_var  "_grf_cs_denom"
+    if "`yhat_source'" != "" {
+        ereturn local yhat_var "_grf_cs_yhat"
+    }
+    if "`chat_source'" != "" {
+        ereturn local chat_var "_grf_cs_chat"
+    }
+    ereturn local nuisance_mode "`nuisance_mode'"
     if "`cluster_var'" != "" {
         ereturn local cluster_var "`cluster_var'"
     }

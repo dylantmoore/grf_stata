@@ -158,12 +158,12 @@ display as text "  PASSED"
 display as text ""
 display as text "--- Fidelity: ATE vs R reference ---"
 
-capture confirm file "tests/ref/causal_ate.csv"
+capture confirm file "ref/causal_ate.csv"
 if _rc == 0 {
     * Reload the reference data and refit
     preserve
     clear
-    import delimited "tests/ref/causal_input.csv", clear
+    import delimited "ref/causal_input.csv", clear
 
     grf_causal_forest y w x1 x2 x3 x4 x5, gen(stata_cate) ntrees(2000) ///
         seed(42) yhatgenerate(stata_yhat) whatgenerate(stata_what) replace
@@ -174,7 +174,7 @@ if _rc == 0 {
 
     * Load R ATE
     clear
-    import delimited "tests/ref/causal_ate.csv", clear
+    import delimited "ref/causal_ate.csv", clear
     local r_ate = estimate[1]
     local r_se  = stderr[1]
 
@@ -199,7 +199,7 @@ if _rc == 0 {
     restore
 }
 else {
-    display as text "  Skipped (no reference data at tests/ref/causal_ate.csv)"
+    display as text "  Skipped (no reference data at ref/causal_ate.csv)"
     display as text "  Run: Rscript tests/generate_reference.R"
 }
 

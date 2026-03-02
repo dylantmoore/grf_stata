@@ -21,6 +21,7 @@ program define grf_survival_forest, eclass
             CIGroupsize(integer 1)             ///
             NUMThreads(integer 0)              ///
             NOUTput(integer 20)                ///
+            FAILURETimes(string)               ///
             NUMFailures(integer 0)             ///
             PREDtype(integer 1)                ///
             REPlace                            ///
@@ -56,13 +57,6 @@ program define grf_survival_forest, eclass
     if `predtype' < 0 | `predtype' > 1 {
         display as error "predtype() must be 0 (Nelson-Aalen) or 1 (Kaplan-Meier)"
         exit 198
-    }
-
-    /* ---- Handle replace ---- */
-    if "`replace'" != "" {
-        forvalues j = 1/`noutput' {
-            capture drop `generate'_s`j'
-        }
     }
 
     /* ---- Parse MIA ---- */
@@ -159,6 +153,60 @@ program define grf_survival_forest, eclass
     local n_events = r(N)
     local n_censored = `n_use' - `n_events'
 
+    /* ---- Parse optional failuretimes() grid ----
+     * Supports either:
+     *   failuretimes(numlist)
+     *   failuretimes(varname)
+     * If specified, noutput() is overridden to match the grid length.
+     */
+    local failure_times_list ""
+    local failure_times_csv ""
+    if `"`failuretimes'"' != "" {
+        local _ft_arg = trim(`"`failuretimes'"')
+        capture confirm numeric variable `_ft_arg'
+        if !_rc {
+            quietly levelsof `_ft_arg' if `touse' & !missing(`_ft_arg'), ///
+                local(failure_times_list)
+        }
+        else {
+            capture noisily numlist `"`_ft_arg'"', sort
+            if _rc {
+                display as error "failuretimes() must be a numeric variable or numlist"
+                exit 198
+            }
+            local failure_times_list `r(numlist)'
+        }
+
+        if `"`failure_times_list'"' == "" {
+            display as error "failuretimes() resolved to an empty grid"
+            exit 198
+        }
+
+        foreach _ft of local failure_times_list {
+            if `_ft' <= 0 {
+                display as error "failuretimes() values must be strictly positive"
+                exit 198
+            }
+        }
+
+        local _n_ft : word count `failure_times_list'
+        if `noutput' != `_n_ft' {
+            display as text "Note: overriding noutput(`noutput') with failuretimes() length `_n_ft'."
+            local noutput = `_n_ft'
+        }
+
+        /* Use explicit grid length for plugin output width. */
+        local numfailures = `noutput'
+        local failure_times_csv : subinstr local failure_times_list " " ",", all
+    }
+
+    /* ---- Handle replace ---- */
+    if "`replace'" != "" {
+        forvalues j = 1/`noutput' {
+            capture drop `generate'_s`j'
+        }
+    }
+
     /* ---- Create output variables ---- */
     forvalues j = 1/`noutput' {
         confirm new variable `generate'_s`j'
@@ -226,6 +274,9 @@ program define grf_survival_forest, eclass
     display as text "Trees:                 " as result `ntrees'
     display as text "Honesty:               " as result cond(`do_honesty', "yes", "no")
     display as text "Output columns:        " as result `noutput'
+    if `"`failure_times_list'"' != "" {
+        display as text "Failure-time grid:     " as result "explicit (`noutput' points)"
+    }
     local predlabel = cond(`predtype' == 0, "Nelson-Aalen", "Kaplan-Meier")
     display as text "Prediction type:       " as result "`predlabel'"
     display as text "{hline 55}"
@@ -305,10 +356,16 @@ program define grf_survival_forest, eclass
         "`weight_col_idx'"                                                  ///
         "`numfailures'"                                                     ///
         "`cpp_predtype'"                                                    ///
-        "`do_fast_logrank'"
+        "`do_fast_logrank'"                                                 ///
+        "`failure_times_csv'"
 
     /* ---- Store results ---- */
     ereturn clear
+    capture scalar __grf_model_counter = __grf_model_counter + 1
+    if _rc {
+        scalar __grf_model_counter = 1
+    }
+    ereturn scalar model_id = __grf_model_counter
     ereturn scalar N           = `n_use'
     ereturn scalar n_events    = `n_events'
     ereturn scalar n_censored  = `n_censored'
@@ -332,6 +389,9 @@ program define grf_survival_forest, eclass
     ereturn local  statusvar     "`statusvar'"
     ereturn local  indepvars     "`indepvars'"
     ereturn local  predict_stub  "`generate'"
+    if `"`failure_times_list'"' != "" {
+        ereturn local failure_times "`failure_times_list'"
+    }
     if "`cluster_var'" != "" {
         ereturn local cluster_var "`cluster_var'"
     }

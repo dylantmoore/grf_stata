@@ -162,7 +162,8 @@ program define grf_generate_causal_data, rclass
     else if "`dgp'" == "ai1" {
         /* Athey-Imbens 1: heterogeneous propensity */
         quietly {
-            gen double e_x = 0.25 * (1 + dbeta(X1, 2, 4))
+            /* Stata has no dbeta() built-in; Beta(2,4) density is 20*x*(1-x)^3. */
+            gen double e_x = 0.25 * (1 + 20 * X1 * (1 - X1)^3)
             gen double mu = 2 * X1 - 1
             gen double tau_true = 1 + 1 / (1 + exp(-20 * (X1 - 1/3)))
             gen byte W = rbinomial(1, e_x)

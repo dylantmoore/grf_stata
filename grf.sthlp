@@ -25,7 +25,8 @@ into the plugin binary.
 
 {pstd}
 The package provides 12 forest types for non-parametric estimation and
-7 post-estimation commands for inference, diagnostics, and prediction.
+an extended post-estimation and utility suite for inference, diagnostics,
+prediction, and model introspection.
 All commands support {cmd:if}/{cmd:in} sample restrictions, store results
 in {cmd:e()} or {cmd:r()}, and run multithreaded by default.
 
@@ -56,12 +57,29 @@ in {cmd:e()} or {cmd:r()}, and run multithreaded by default.
 {p2col:Command}Description{p_end}
 {p2line}
 {p2col:{helpb grf_ate}}Average treatment effect (AIPW doubly-robust estimator){p_end}
+{p2col:{helpb grf_average_partial_effect}}Average partial effect (continuous-treatment compatibility command){p_end}
 {p2col:{helpb grf_best_linear_projection}}Project CATEs onto covariates (BLP){p_end}
 {p2col:{helpb grf_test_calibration}}Calibration test for forest predictions{p_end}
 {p2col:{helpb grf_variable_importance}}Variable importance via weighted split frequencies{p_end}
+{p2col:{helpb grf_get_scores}}Extract DR/IPCW score variables{p_end}
 {p2col:{helpb grf_rate}}Rank-weighted average treatment effect (AUTOC/QINI){p_end}
 {p2col:{helpb grf_predict}}Predict on new (out-of-sample) data{p_end}
 {p2col:{helpb grf_tune}}Cross-validation tuning of forest parameters{p_end}
+{p2line}
+
+{title:Utility commands}
+
+{p2colset 5 40 42 2}{...}
+{p2col:Command}Description{p_end}
+{p2line}
+{p2col:{helpb grf_forest_summary}}Forest-level metadata summary{p_end}
+{p2col:{helpb grf_tree_summary}}Tree-level metadata summary{p_end}
+{p2col:{helpb grf_get_tree}}Wrapper for tree summary extraction{p_end}
+{p2col:{helpb grf_get_leaf_node}}Leaf-node proxy assignments from predictions{p_end}
+{p2col:{helpb grf_get_forest_weights}}Observation-weight proxy extraction{p_end}
+{p2col:{helpb grf_merge_forests}}Merge two prediction vectors with convex weights{p_end}
+{p2col:{helpb grf_split_frequencies}}Depth-aggregated split-frequency proxy{p_end}
+{p2col:{helpb grf_plot_tree}}Split-frequency proxy visualization{p_end}
 {p2line}
 
 {marker quickstart}{...}
@@ -110,15 +128,15 @@ Linux (x86_64), and Windows (x86_64).  Stata 14.0 or later is required.
 {pstd}
 The following R features are not available in the Stata version:
 
-{phang}{bf:User-supplied nuisance estimates.}
-R supports pre-computed {cmd:W.hat}, {cmd:Y.hat}, {cmd:Z.hat} for
-causal, instrumental, and related forests. Stata always estimates
-nuisance parameters internally via regression forests.{p_end}
+{phang}{bf:Partial nuisance-option parity.}
+Many nuisance hooks are exposed (for example {cmd:yhatinput()},
+{cmd:whatinput()}, {cmd:zhatinput()} where applicable), but not every
+R nuisance option is available for every forest family.{p_end}
 
 {phang}{bf:Local linear split variable selection.}
-R's {cmd:ll.split.variables} accepts a vector of variable indices.
-Stata's {cmd:llsplit} is a boolean toggle that enables local linear
-splitting on all variables.{p_end}
+R's {cmd:ll.split.variables} accepts variable indices. Stata uses
+{cmd:llvars(varlist)} and {cmd:llenable} to control local-linear split
+variables.{p_end}
 
 {phang}{bf:APE deprecation.}
 R has deprecated {cmd:average_partial_effect()} in favor of
@@ -128,8 +146,22 @@ as a standalone command.{p_end}
 
 {phang}{bf:Causal survival DR scores.}
 {cmd:grf_get_scores} after {cmd:grf_causal_survival_forest} returns
-plug-in CATE scores, not full AIPW doubly-robust scores. Full survival
-DR scores require censoring hazard estimates not available in {cmd:e()}.{p_end}
+IPCW/DR scores based on stored nuisance moments. Exact parity may still differ
+for advanced workflows that require upstream internals not exposed through the
+plugin interface.{p_end}
+
+{phang}{bf:Package-level options API.}
+R's {cmd:grf_options()} is not mirrored; Stata intentionally uses
+per-command options.{p_end}
+
+{phang}{bf:OOB prediction toggle.}
+R's {cmd:compute.oob.predictions} option is not exposed; Stata fit commands
+always materialize prediction output columns by command design.{p_end}
+
+{phang}{bf:Upstream-constrained options.}
+Some R options (for example {cmd:orthog.boosting} and enum-style
+{cmd:honesty.prune.method}) are not exposed under the current vendored
+core API.{p_end}
 
 {marker references}{...}
 {title:References}

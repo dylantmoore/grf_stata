@@ -10,7 +10,7 @@ d multi-regression, local linear regression, boosted regression,
 d and LM forest.
 d
 d Post-estimation: ATE, best linear projection, variable importance,
-d calibration test, RATE, predict on new data, tuning.
+d calibration test, RATE, get_scores, average partial effect, predict on new data, tuning, and utility/introspection commands.
 d
 d Requires Stata 14.0 or later.
 d
@@ -55,6 +55,26 @@ F grf_tune.ado
 F grf_tune.sthlp
 F grf_rate.ado
 F grf_rate.sthlp
+F grf_get_scores.ado
+F grf_get_scores.sthlp
+F grf_average_partial_effect.ado
+F grf_average_partial_effect.sthlp
+F grf_forest_summary.ado
+F grf_forest_summary.sthlp
+F grf_tree_summary.ado
+F grf_tree_summary.sthlp
+F grf_get_tree.ado
+F grf_get_tree.sthlp
+F grf_get_leaf_node.ado
+F grf_get_leaf_node.sthlp
+F grf_get_forest_weights.ado
+F grf_get_forest_weights.sthlp
+F grf_merge_forests.ado
+F grf_merge_forests.sthlp
+F grf_split_frequencies.ado
+F grf_split_frequencies.sthlp
+F grf_plot_tree.ado
+F grf_plot_tree.sthlp
 F grf_plugin_macosx.plugin
 F grf_plugin_unix.plugin
 F grf_plugin_windows.plugin

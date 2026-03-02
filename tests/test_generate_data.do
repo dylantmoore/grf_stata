@@ -1,5 +1,5 @@
 * test_generate_data.do -- Tests for grf_generate_causal_data and
-*                         grf_generate_causal_survival_data
+*                         grf_generate_causal_surv_data
 * Tests all DGPs, seed reproducibility, and error handling
 
 clear all
@@ -130,7 +130,7 @@ else {
 }
 
 * ============================================================
-* grf_generate_causal_survival_data: test all 6 DGPs
+* grf_generate_causal_surv_data: test all 6 DGPs
 * ============================================================
 
 local surv_dgps "simple1 type1 type2 type3 type4 type5"
@@ -138,7 +138,7 @@ foreach dgp of local surv_dgps {
 
     capture noisily {
         clear
-        grf_generate_causal_survival_data, n(200) p(5) dgp(`dgp') seed(42)
+        grf_generate_causal_surv_data, n(200) p(5) dgp(`dgp') seed(42)
 
         * Save r() results immediately before count overwrites them
         local saved_n_events = r(n_events)
@@ -171,11 +171,11 @@ foreach dgp of local surv_dgps {
         assert `saved_n_events' > 0
     }
     if _rc {
-        display as error "FAIL: grf_generate_causal_survival_data dgp(`dgp')"
+        display as error "FAIL: grf_generate_causal_surv_data dgp(`dgp')"
         local errors = `errors' + 1
     }
     else {
-        display as result "PASS: grf_generate_causal_survival_data dgp(`dgp')"
+        display as result "PASS: grf_generate_causal_surv_data dgp(`dgp')"
     }
 }
 
@@ -186,12 +186,12 @@ foreach dgp of local surv_dgps {
 * ---- Test 22: seed reproducibility (survival) ----
 capture noisily {
     clear
-    grf_generate_causal_survival_data, n(200) p(5) dgp(type1) seed(99)
+    grf_generate_causal_surv_data, n(200) p(5) dgp(type1) seed(99)
     tempfile srun1
     quietly save `srun1'
 
     clear
-    grf_generate_causal_survival_data, n(200) p(5) dgp(type1) seed(99)
+    grf_generate_causal_surv_data, n(200) p(5) dgp(type1) seed(99)
     quietly cf _all using `srun1'
 }
 if _rc {
@@ -209,7 +209,7 @@ else {
 * ---- Test 23: invalid DGP name for survival data ----
 capture noisily {
     clear
-    capture grf_generate_causal_survival_data, n(200) p(5) dgp(bogus) seed(42)
+    capture grf_generate_causal_surv_data, n(200) p(5) dgp(bogus) seed(42)
     assert _rc != 0
 }
 if _rc {
@@ -220,21 +220,62 @@ else {
     display as result "PASS: survival data invalid DGP name"
 }
 
-* ---- Test 24: survival data minimum p enforcement ----
+* ---- Test 24: survival data minimum p enforcement (type3 with p=1 errors) ----
 capture noisily {
     clear
-    capture grf_generate_causal_survival_data, n(200) p(2) dgp(type3) seed(42)
-    * type3 may require more predictors — check if it errors
-    * If it doesn't error with p=2, that's fine (not all DGPs need min p)
-    * but the test documents we checked it
-    assert _rc == 0 | _rc != 0
+    capture grf_generate_causal_surv_data, n(200) p(1) dgp(type3) seed(42)
+    assert _rc != 0
 }
 if _rc {
-    display as error "FAIL: survival data minimum p check"
+    display as error "FAIL: survival data minimum p enforcement (type3 with p=1)"
     local errors = `errors' + 1
 }
 else {
-    display as result "PASS: survival data minimum p check"
+    display as result "PASS: survival data minimum p enforcement (type3 with p=1)"
+}
+
+* ---- Test 25: survival data minimum p valid boundary (type3 with p=2) ----
+capture noisily {
+    clear
+    grf_generate_causal_surv_data, n(200) p(2) dgp(type3) seed(42)
+    assert _N == 200
+    confirm numeric variable X1
+    confirm numeric variable X2
+}
+if _rc {
+    display as error "FAIL: survival data minimum p boundary (type3 with p=2)"
+    local errors = `errors' + 1
+}
+else {
+    display as result "PASS: survival data minimum p boundary (type3 with p=2)"
+}
+
+* ---- Test 26: survival data minimum p enforcement (type4 with p=1 errors) ----
+capture noisily {
+    clear
+    capture grf_generate_causal_surv_data, n(200) p(1) dgp(type4) seed(42)
+    assert _rc != 0
+}
+if _rc {
+    display as error "FAIL: survival data minimum p enforcement (type4 with p=1)"
+    local errors = `errors' + 1
+}
+else {
+    display as result "PASS: survival data minimum p enforcement (type4 with p=1)"
+}
+
+* ---- Test 27: survival data minimum p enforcement (type5 with p=1 errors) ----
+capture noisily {
+    clear
+    capture grf_generate_causal_surv_data, n(200) p(1) dgp(type5) seed(42)
+    assert _rc != 0
+}
+if _rc {
+    display as error "FAIL: survival data minimum p enforcement (type5 with p=1)"
+    local errors = `errors' + 1
+}
+else {
+    display as result "PASS: survival data minimum p enforcement (type5 with p=1)"
 }
 
 * ============================================================

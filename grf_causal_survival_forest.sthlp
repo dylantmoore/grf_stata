@@ -1,5 +1,5 @@
 {smcl}
-{* *! version 0.1.0}{...}
+{* *! version 0.2.0}{...}
 {viewerjumpto "Syntax" "grf_causal_survival_forest##syntax"}{...}
 {viewerjumpto "Description" "grf_causal_survival_forest##description"}{...}
 {viewerjumpto "Options" "grf_causal_survival_forest##options"}{...}
@@ -10,92 +10,123 @@
 {title:Title}
 
 {phang}
-{bf:grf_causal_survival_forest} {hline 2} Causal survival forest for estimating
-heterogeneous treatment effects with survival outcomes
+{bf:grf_causal_survival_forest} {hline 2} Causal survival forest for heterogeneous treatment effects with right-censored outcomes
 
 {marker syntax}{...}
 {title:Syntax}
 
 {p 8 17 2}
 {cmd:grf_causal_survival_forest}
-{it:timevar} {it:statusvar} {it:treatvar} {indepvars}
+{it:timevar} {it:statusvar} {it:treatvar} {it:indepvars}
 {ifin}{cmd:,}
 {opt gen:erate(newvar)}
 [{it:options}]
 
-{synoptset 30 tabbed}{...}
+{synoptset 32 tabbed}{...}
 {synopthdr}
 {synoptline}
 {syntab:Main}
 {synopt:{opt gen:erate(newvar)}}name for CATE predictions{p_end}
-{synopt:{opt replace}}overwrite existing variable{p_end}
+{synopt:{opt replace}}overwrite existing output variable{p_end}
 
 {syntab:Forest}
-{synopt:{opt ntrees(#)}}number of trees; default {bf:2000}{p_end}
-{synopt:{opt seed(#)}}random seed; default {bf:42}{p_end}
-{synopt:{opt mtry(#)}}variables per split; default {bf:ceil(sqrt(p))}{p_end}
-{synopt:{opt minnodesize(#)}}minimum node size; default {bf:15}{p_end}
-{synopt:{opt samplefrac(#)}}sample fraction; default {bf:0.5}{p_end}
-{synopt:{opt honesty}/{opt nohonesty}}use honesty splitting; default {bf:honesty}{p_end}
-{synopt:{opt honestyfrac(#)}}honesty fraction; default {bf:0.5}{p_end}
-{synopt:{opt alpha(#)}}balance parameter; default {bf:0.05}{p_end}
-{synopt:{opt imbalancepenalty(#)}}imbalance penalty; default {bf:0.0}{p_end}
-{synopt:{opt numthreads(#)}}threads; default {bf:0} (auto){p_end}
+{synopt:{opt ntrees(#)}}number of trees; default {cmd:2000}{p_end}
+{synopt:{opt seed(#)}}random seed; default {cmd:42}{p_end}
+{synopt:{opt mtry(#)}}variables considered per split; default {cmd:mtry(0)} (auto){p_end}
+{synopt:{opt minnodesize(#)}}minimum node size; default {cmd:15}{p_end}
+{synopt:{opt samplefrac(#)}}sample fraction per tree; default {cmd:0.5}{p_end}
+{synopt:{opt honesty}/{opt nohonesty}}honest splitting; default {cmd:honesty}{p_end}
+{synopt:{opt honestyfrac(#)}}honesty split fraction; default {cmd:0.5}{p_end}
+{synopt:{opt nohonestyprune}}disable honest-leaf pruning{p_end}
+{synopt:{opt alpha(#)}}imbalance bound; default {cmd:0.05}{p_end}
+{synopt:{opt imbalancepenalty(#)}}split imbalance penalty; default {cmd:0.0}{p_end}
+{synopt:{opt numthreads(#)}}threads; default {cmd:0} (auto){p_end}
 
 {syntab:Causal survival}
-{synopt:{opt stab:ilizesplits}/{opt nostab:ilizesplits}}stabilize splits; default {bf:stabilize}{p_end}
-{synopt:{opt numer(varname)}}pre-computed numerator (advanced){p_end}
-{synopt:{opt denom(varname)}}pre-computed denominator (advanced){p_end}
-{synopt:{opt hor:izon(#)}}time horizon for restricted mean survival{p_end}
-{synopt:{opt tar:get(#)}}target type: 1=RMST (default), 2=survival probability{p_end}
+{synopt:{opt horizon(#)}}horizon for RMST/survival-probability estimand (0 = median event time){p_end}
+{synopt:{opt target(#)}}estimand target: {cmd:1}=RMST (default), {cmd:2}=survival probability{p_end}
+{synopt:{opt nostabilizesplits}}disable split stabilization{p_end}
+{synopt:{opt numer(varname)}}precomputed IPCW numerator column{p_end}
+{synopt:{opt denom(varname)}}precomputed IPCW denominator column{p_end}
+{synopt:{opt whatinput(varname)}}user-supplied propensity nuisance {it:W.hat}{p_end}
+{synopt:{opt yhatinput(varname)}}user-supplied outcome nuisance {it:Y.hat}{p_end}
+{synopt:{opt chatinput(varname)}}user-supplied censoring nuisance {it:C.hat}{p_end}
 
 {syntab:Variance}
-{synopt:{opt est:imatevariance}}compute variance estimates{p_end}
-{synopt:{opt var:generate(newvar)}}store variance estimates{p_end}
+{synopt:{opt estimatevariance}}compute variance estimates{p_end}
+{synopt:{opt vargenerate(newvar)}}name for variance output (default: {it:generate}{cmd:_var}){p_end}
+{synopt:{opt cigroupsize(#)}}ci-group size; forced to >=2 with {cmd:estimatevariance}{p_end}
+
+{syntab:Missingness and weighting}
+{synopt:{opt nomia}}disable MIA and use casewise deletion of missing X values{p_end}
+{synopt:{opt cluster(varname)}}cluster ID variable{p_end}
+{synopt:{opt weights(varname)}}sample weights{p_end}
+{synopt:{opt equalizeclusterweights}}reweight to equalize cluster contribution; requires {cmd:cluster()}{p_end}
+
+{syntab:Inline tuning}
+{synopt:{opt tuneparameters(string)}}parameters to tune inline{p_end}
+{synopt:{opt tunenumtrees(#)}}trees used in tuning stage; default {cmd:200}{p_end}
+{synopt:{opt tunenumreps(#)}}tuning repetitions; default {cmd:50}{p_end}
 {synoptline}
 
 {marker description}{...}
 {title:Description}
 
 {pstd}
-{cmd:grf_causal_survival_forest} estimates heterogeneous treatment effects
-for survival outcomes using the causal survival forest of Cui et al. (2023).
-It implements the {cmd:causal_survival_forest()} function from R's {bf:grf}
-package.
+{cmd:grf_causal_survival_forest} estimates heterogeneous treatment effects for
+survival outcomes using the causal survival forest of Cui et al. (2023).
 
 {pstd}
-The command implements a multi-step nuisance estimation pipeline:
-(1) survival forest for censoring model,
-(2) regression forests for nuisance parameters,
-(3) causal survival forest on the centered data.
+The command supports two nuisance modes:
+
+{phang}
+{bf:Estimated IPCW mode} (default): nuisance quantities are estimated internally
+with regression/survival proxies, producing IPCW numerator/denominator columns
+used by the causal-survival forest objective.{p_end}
+
+{phang}
+{bf:Precomputed mode}: user supplies {cmd:numer()} and {cmd:denom()} directly.
+These must be supplied together.{p_end}
 
 {pstd}
-{it:timevar} is the survival/failure time variable,
-{it:statusvar} is the censoring indicator (1=event, 0=censored),
-and {it:treatvar} is the binary treatment variable.
+Optional nuisance hooks {cmd:whatinput()}, {cmd:yhatinput()}, and
+{cmd:chatinput()} let advanced users override parts of the default nuisance
+pipeline while keeping the forest fit in Stata.
 
 {marker options}{...}
 {title:Options}
 
-{dlgtab:Main}
+{phang}
+{opt numer(varname)} and {opt denom(varname)} specify precomputed nuisance
+moments. Use either both or neither.
 
 {phang}
-{opt generate(newvar)} specifies the name for the CATE prediction variable.
+{opt whatinput(varname)} supplies propensity nuisance estimates
+{it:W.hat = E[W|X]}.
 
 {phang}
-{opt numer(varname)} and {opt denom(varname)} provide pre-computed nuisance
-estimates for advanced users who want to supply their own censoring model.
-If omitted, the command estimates them internally.
+{opt yhatinput(varname)} supplies the outcome nuisance used in the IPCW
+moment construction.
 
 {phang}
-{opt horizon(#)} sets the time horizon for restricted mean survival time.
-If 0 (default), uses the maximum observed failure time.
+{opt chatinput(varname)} supplies a censoring-survival proxy used in IPCW
+weighting; values are clipped internally to a numerically stable range.
+
+{phang}
+{opt target(#)} chooses the estimand used when constructing nuisance moments:
+{cmd:1} for RMST, {cmd:2} for survival probability at {cmd:horizon()}.
 
 {marker examples}{...}
 {title:Examples}
 
-{pstd}Estimate causal survival forest:{p_end}
-{phang}{cmd:. grf_causal_survival_forest time status treatment x1 x2 x3, gen(cate) ntrees(2000) seed(42)}{p_end}
+{pstd}Default nuisance estimation{p_end}
+{phang2}{cmd:. grf_causal_survival_forest time status w x1 x2 x3, gen(cs_tau)}{p_end}
+
+{pstd}User-supplied nuisance hooks{p_end}
+{phang2}{cmd:. grf_causal_survival_forest time status w x1 x2 x3, gen(cs_tau2) horizon(4) whatinput(wh) yhatinput(yh) chatinput(ch)}{p_end}
+
+{pstd}Fully precomputed nuisance moments{p_end}
+{phang2}{cmd:. grf_causal_survival_forest time status w x1 x2 x3, gen(cs_tau3) numer(num) denom(den)}{p_end}
 
 {marker results}{...}
 {title:Stored results}
@@ -103,16 +134,28 @@ If 0 (default), uses the maximum observed failure time.
 {pstd}
 {cmd:grf_causal_survival_forest} stores the following in {cmd:e()}:
 
-{synoptset 24 tabbed}{...}
-{p2col 5 24 28 2: Scalars}{p_end}
-{synopt:{cmd:e(N)}}number of observations{p_end}
+{synoptset 28 tabbed}{...}
+{p2col 5 28 32 2: Scalars}{p_end}
+{synopt:{cmd:e(N)}}observations used{p_end}
+{synopt:{cmd:e(n_events)}}event count{p_end}
+{synopt:{cmd:e(n_censored)}}censored count{p_end}
 {synopt:{cmd:e(n_trees)}}number of trees{p_end}
-{synopt:{cmd:e(seed)}}random seed{p_end}
+{synopt:{cmd:e(horizon)}}horizon used{p_end}
+{synopt:{cmd:e(target)}}target type (1=RMST, 2=survival probability){p_end}
+{synopt:{cmd:e(ate)}}mean CATE prediction{p_end}
+{synopt:{cmd:e(ate_se)}}SE of mean CATE prediction{p_end}
 
-{p2col 5 24 28 2: Macros}{p_end}
-{synopt:{cmd:e(cmd)}}grf_causal_survival_forest{p_end}
-{synopt:{cmd:e(forest_type)}}causal_survival{p_end}
-{synopt:{cmd:e(predict_var)}}name of prediction variable{p_end}
+{p2col 5 28 32 2: Macros}{p_end}
+{synopt:{cmd:e(cmd)}}{cmd:grf_causal_survival_forest}{p_end}
+{synopt:{cmd:e(forest_type)}}{cmd:causal_survival}{p_end}
+{synopt:{cmd:e(predict_var)}}CATE output variable{p_end}
+{synopt:{cmd:e(variance_var)}}variance output variable (if requested){p_end}
+{synopt:{cmd:e(what_var)}}stored propensity nuisance variable ({cmd:_grf_cs_what}){p_end}
+{synopt:{cmd:e(numer_var)}}stored IPCW numerator variable ({cmd:_grf_cs_numer}){p_end}
+{synopt:{cmd:e(denom_var)}}stored IPCW denominator variable ({cmd:_grf_cs_denom}){p_end}
+{synopt:{cmd:e(yhat_var)}}stored outcome nuisance variable when available ({cmd:_grf_cs_yhat}){p_end}
+{synopt:{cmd:e(chat_var)}}stored censoring nuisance variable when available ({cmd:_grf_cs_chat}){p_end}
+{synopt:{cmd:e(nuisance_mode)}}{cmd:estimated_ipcw} or {cmd:precomputed_numer_denom}{p_end}
 
 {marker references}{...}
 {title:References}
@@ -125,8 +168,3 @@ Causal Survival Forests. {it:Journal of the Royal Statistical Society, Series B}
 {pstd}
 Athey, S., J. Tibshirani, and S. Wager. 2019.
 Generalized Random Forests. {it:Annals of Statistics} 47(2): 1148-1178.
-
-{title:Author}
-
-{pstd}
-GRF Stata plugin. Wraps the grf C++ library (grf-labs/grf, v2.5.0, GPL-3.0).

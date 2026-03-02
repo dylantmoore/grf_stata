@@ -1,0 +1,91 @@
+=== GRF_STATA FIDELITY AUDIT FILE LIST ===
+
+ADO FILES (24 total, ~9714 lines):
+  Forest commands (12):
+    grf_regression_forest.ado
+    grf_causal_forest.ado
+    grf_quantile_forest.ado
+    grf_instrumental_forest.ado
+    grf_probability_forest.ado
+    grf_survival_forest.ado
+    grf_causal_survival_forest.ado
+    grf_multi_arm_causal_forest.ado
+    grf_multi_regression_forest.ado
+    grf_ll_regression_forest.ado
+    grf_boosted_regression_forest.ado
+    grf_lm_forest.ado
+
+  Post-estimation commands (7):
+    grf_ate.ado
+    grf_best_linear_projection.ado
+    grf_test_calibration.ado
+    grf_variable_importance.ado
+    grf_rate.ado
+    grf_predict.ado
+    grf_tune.ado
+
+  Other commands (5):
+    grf_get_scores.ado
+    grf_average_partial_effect.ado
+    grf_expected_survival.ado
+    grf_generate_causal_data.ado
+    grf_generate_causal_survival_data.ado
+
+TEST FILES (43 total, ~12266 lines):
+  tests/test_regression.do
+  tests/test_causal.do
+  tests/test_quantile.do
+  tests/test_instrumental.do
+  tests/test_probability.do
+  tests/test_survival.do
+  tests/test_causal_survival.do
+  tests/test_multi_arm.do
+  tests/test_multi_regression.do
+  tests/test_ll_regression.do
+  tests/test_boosted_regression.do
+  tests/test_lm_forest.do
+  tests/test_options_regression.do
+  tests/test_options_causal.do
+  tests/test_options_quantile.do
+  tests/test_options_instrumental.do
+  tests/test_options_probability.do
+  tests/test_options_survival.do
+  tests/test_options_causal_survival.do
+  tests/test_options_multi_arm.do
+  tests/test_options_multi_regression.do
+  tests/test_options_ll_regression.do
+  tests/test_options_boosted.do
+  tests/test_options_lm_forest.do
+  tests/test_options_post_estimation.do
+  tests/test_post_estimation.do
+  tests/test_features.do
+  tests/test_full_pipeline.do
+  tests/test_rate.do
+  tests/test_get_scores.do
+  tests/test_predict.do
+  tests/test_tune.do
+  tests/test_tune_extended.do
+  tests/test_expected_survival.do
+  tests/test_fidelity.do
+  tests/test_mia.do
+  tests/test_clusters.do
+  tests/test_weights.do
+  tests/test_seed_reproducibility.do
+  tests/test_average_partial_effect.do
+  tests/test_generate_data.do
+  tests/test_speed.do
+  tests/debug_survival.do
+
+HELP FILES (20, ~3285 lines):
+  grf.sthlp (overview)
+  + 19 per-command .sthlp files
+
+C++ PLUGIN:
+  grf_plugin.cpp (~1565 lines)
+
+R REFERENCE:
+  tests/generate_reference.R
+  tests/benchmark_r.R
+
+README:
+  README.md

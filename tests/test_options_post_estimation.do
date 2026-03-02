@@ -415,6 +415,26 @@ else {
     display as result "PASS: grf_rate with in restriction"
 }
 
+* ---- Test 21c: grf_rate with subset() ----
+capture noisily {
+    grf_causal_forest y w x1-x5, gen(tau_rate_subset) ntrees(100) seed(42)
+    gen byte keep_rate = (x1 > 0)
+    grf_rate tau_rate_subset, subset(keep_rate) bootstrap(50) seed(42)
+    local est_subset = r(estimate)
+    assert !missing(`est_subset')
+    assert "`r(subset_var)'" == "keep_rate"
+    grf_rate tau_rate_subset if x1 > 0, bootstrap(50) seed(42)
+    assert reldif(`est_subset', r(estimate)) < 1e-10
+    drop tau_rate_subset _grf_yhat _grf_what keep_rate
+}
+if _rc {
+    display as error "FAIL: grf_rate with subset()"
+    local errors = `errors' + 1
+}
+else {
+    display as result "PASS: grf_rate with subset()"
+}
+
 * ============================================================
 * grf_predict tests
 * ============================================================

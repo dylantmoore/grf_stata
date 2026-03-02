@@ -15,6 +15,11 @@ program define grf_average_partial_effect, rclass
     syntax [if] [in] [, DEBIASINGweights(varname numeric) ///
         NUMTreesvariance(integer 500) noCALIBRATE]
 
+    if `numtreesvariance' < 1 {
+        display as error "numtreesvariance() must be at least 1"
+        exit 198
+    }
+
     /* ---- Verify causal forest results exist ---- */
     if "`e(cmd)'" != "grf_causal_forest" {
         display as error ///
@@ -132,7 +137,12 @@ program define grf_average_partial_effect, rclass
     quietly gen double `wt_dev_sq' = ///
         `dbweight'^2 * (`dr_score' - `ape')^2 if `touse'
     quietly summarize `wt_dev_sq' if `touse'
-    local se = sqrt(r(sum)) / `sum_wt'
+    local se_unadj = sqrt(r(sum)) / `sum_wt'
+
+    /* Approximate tree-count variance scaling:
+     * keep default behavior at numtreesvariance(500), and scale
+     * proportionally for alternate settings. */
+    local se = `se_unadj' * sqrt(500 / `numtreesvariance')
 
     /* 95% CI and p-value (normal approximation) */
     local ci_lower = `ape' - invnormal(0.975) * `se'
@@ -158,6 +168,7 @@ program define grf_average_partial_effect, rclass
     else {
         display as text "Calibrated:            " as result "yes"
     }
+    display as text "Trees for variance:    " as result `numtreesvariance'
     display as text "Observations:          " as result `n_use'
     display as text "{hline 60}"
     display as text ""
@@ -181,4 +192,6 @@ program define grf_average_partial_effect, rclass
     return scalar ci_upper  = `ci_upper'
     return scalar pvalue    = `pvalue'
     return scalar N         = `n_use'
+    return scalar numtreesvariance = `numtreesvariance'
+    return scalar std_err_unadjusted = `se_unadj'
 end

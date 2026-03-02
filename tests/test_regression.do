@@ -115,10 +115,10 @@ display as text "  ALL OPTIONS TESTS PASSED"
 display as text ""
 display as text "--- Test 5: Fidelity vs R reference ---"
 
-capture confirm file "tests/ref/regression_input.csv"
+capture confirm file "ref/regression_input.csv"
 if _rc == 0 {
     clear
-    import delimited "tests/ref/regression_input.csv", clear
+    import delimited "ref/regression_input.csv", clear
 
     * Run forest on same data
     grf_regression_forest y x1 x2 x3 x4 x5, gen(stata_pred) ntrees(2000) ///
@@ -126,7 +126,7 @@ if _rc == 0 {
 
     * Load R predictions
     preserve
-    import delimited "tests/ref/regression_output.csv", clear
+    import delimited "ref/regression_output.csv", clear
     rename prediction r_pred
     rename variance r_var
     gen n = _n
@@ -153,7 +153,7 @@ if _rc == 0 {
     }
 }
 else {
-    display as text "  Skipped (no reference data at tests/ref/regression_input.csv)"
+    display as text "  Skipped (no reference data at ref/regression_input.csv)"
     display as text "  Run: Rscript tests/generate_reference.R"
 }
 

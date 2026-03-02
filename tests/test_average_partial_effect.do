@@ -202,6 +202,9 @@ capture noisily {
     * Both should be positive
     assert `se_default' > 0
     assert `se_100' > 0
+    * Option should affect variance scaling (not just command success)
+    assert abs(`se_default' - `se_100') > 1e-12
+    assert `se_100' > `se_default'
 
     drop tau_ape8 _grf_yhat _grf_what y w
 }

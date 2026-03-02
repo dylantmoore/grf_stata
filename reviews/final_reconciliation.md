@@ -1,0 +1,64 @@
+# Final Reconciliation: Consolidated Report Remediation
+
+## Gap-by-gap closure (1-16)
+
+| Gap | Closure | Evidence |
+|---|---|---|
+| 1. Incomplete fidelity consumption | Resolved (verify-and-lock) | `tests/test_fidelity.do` uses assertive thresholds across expanded reference set |
+| 2. No RATE fidelity data | Resolved (verify-and-lock) | `tests/generate_reference.R` writes `ref/causal_rate_autoc.csv`; `tests/test_fidelity.do` RATE z-test |
+| 3. Missing clusters/sample.weights | Resolved (verify-and-lock) | Cluster/weights plumbing in forest commands and plugin; docs mapping in `README.md` |
+| 4. Missing MIA passthrough | Resolved (verify-and-lock) | NaN passthrough in `grf_plugin.cpp`; `tests/test_mia.do` |
+| 5. Missing fidelity for additional forest types | Resolved (verify-and-lock) | Expanded checks in `tests/test_fidelity.do` (quantile/probability/instrumental/survival/LL/LM/multi/boosted/causal-survival) |
+| 6. `grf_tune` forest-specific options untested | Resolved (verify-and-lock) | Non-default option tests in `tests/test_tune_extended.do` |
+| 7. `numtreesvariance()` untested in APE | Resolved (verify-and-lock) | Option wired in `grf_average_partial_effect.ado`; effect asserted in `tests/test_average_partial_effect.do` |
+| 8. BLP `target.sample` limited + stale docs | Resolved | `grf_best_linear_projection.ado` supports all/overlap/treated/control; `grf_best_linear_projection.sthlp` refreshed |
+| 9. `grf_get_scores` causal-survival path incomplete | Resolved (implemented) | IPCW/DR moment-corrected scores in `grf_get_scores.ado`; tests in `tests/test_get_scores.do` |
+| 10. `ref/` vs `tests/ref/` inconsistency | Resolved | test paths standardized to `ref/` |
+| 11. APE removed in R | Resolved (verify-and-lock) | Deprecation note in `grf_average_partial_effect.ado`, `grf_average_partial_effect.sthlp`, `README.md`, `grf.sthlp` |
+| 12. `in` qualifier untested (RATE/APE) | Resolved (verify-and-lock) | `tests/test_options_post_estimation.do`, `tests/test_average_partial_effect.do` |
+| 13. Survival DGP error handling gap | Resolved (implemented) | Deterministic invalid/valid tests in `tests/test_generate_data.do` for `type3/4/5` |
+| 14. Seed reproducibility test not in standard path | Resolved (runner integration) | `tests/test_seed_reproducibility.do` included by `tests/run_all.do` |
+| 15. LL split-variable parity docs | Resolved (verify-and-lock) | `llvars()` behavior in `grf_ll_regression_forest.ado` and `grf_ll_regression_forest.sthlp` |
+| 16. User-supplied nuisance estimates not exposed | Partially resolved (implemented extension) | Added `whatinput()/yhatinput()/chatinput()` + persisted nuisance outputs in `grf_causal_survival_forest.ado` and tests |
+
+## Section 5 (R function surface) closure
+
+| Function | Closure | Evidence |
+|---|---|---|
+| `get_tree()` | Implemented (minimal equivalent) | `grf_get_tree.ado`, `grf_get_tree.sthlp` |
+| `get_leaf_node()` | Implemented (minimal equivalent) | `grf_get_leaf_node.ado`, `grf_get_leaf_node.sthlp` |
+| `get_forest_weights()` | Implemented (minimal equivalent) | `grf_get_forest_weights.ado`, `grf_get_forest_weights.sthlp` |
+| `merge_forests()` | Implemented (minimal equivalent) | `grf_merge_forests.ado`, `grf_merge_forests.sthlp` |
+| `split_frequencies()` | Implemented (analysis-wrapper equivalent) | `grf_split_frequencies.ado`, `grf_split_frequencies.sthlp` |
+| `get_scores.multi_arm_causal_forest()` | Verify-and-lock | Covered in `grf_get_scores.ado` + `tests/test_get_scores.do` |
+| `get_scores.causal_survival_forest()` | Implemented | IPCW/DR path in `grf_get_scores.ado` + tests |
+| `print.grf()` / `print.grf_tree()` | Implemented (minimal equivalent) | `grf_forest_summary.ado`, `grf_tree_summary.ado` (+ help files) |
+| `plot.grf_tree()` | Implemented (minimal equivalent) | `grf_plot_tree.ado`, `grf_plot_tree.sthlp` |
+| `plot.rank_average_treatment_effect()` | Document-and-close | Not adopted as a parity target in this cycle |
+| `grf_options()` | Document-and-close | Explicit non-goal in `README.md` and `grf.sthlp` |
+
+## Section 6 (R options/behaviors) closure
+
+| Option/behavior | Closure | Evidence |
+|---|---|---|
+| `clusters` | Verify-and-lock | Forest option plumbing + tests |
+| `equalize.cluster.weights` | Verify-and-lock | `equalizeclusterweights` handling + tests |
+| `sample.weights` | Verify-and-lock | `weights()` plumbing + mapping documented in `README.md` |
+| `compute.oob.predictions` | Document-and-close | Explicit non-applicability note in `README.md` and `grf.sthlp` |
+| `missing.action` (MIA) | Verify-and-lock | Default MIA + `nomia` toggle |
+| Integrated tuning (`tune.parameters`) | Verify-and-lock | Per-command inline tuning support |
+| `W.hat`, `Y.hat`, `Z.hat` user inputs | Extended / verify-and-lock | Existing causal/instrumental/multi-arm hooks + causal-survival extension |
+| `orthog.boosting` | Document-and-close (upstream constrained) | Limitation note in docs |
+| Quantile `regression.splitting` | Verify-and-lock | Existing implementation/tests |
+| LL split variable vector | Verify-and-lock | `llvars()` implementation/docs/tests |
+| Survival `failure.times` grid | Implemented | `failuretimes()` in `grf_survival_forest.ado` + tests |
+| `honesty.prune.method` enum | Document-and-close (upstream constrained) | Limitation note in docs |
+| BLP `target.sample` treated/control | Verify-and-lock | Implementation + refreshed help |
+| RATE `subset` | Implemented | `subset(varname)` in `grf_rate.ado` + tests |
+| `get_scores` broader support | Implemented/verified | Multi-arm + causal-survival paths in `grf_get_scores.ado` + tests |
+
+## Additional API closures
+
+- `e(model_id)` added across all fit commands.
+- Canonical test reference contract standardized to `ref/`.
+- Standard runner now includes seed/model-id/survival-option/get-scores/utility coverage in `tests/run_all.do`.

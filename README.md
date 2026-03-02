@@ -40,12 +40,25 @@ net install grf_stata, from("https://raw.githubusercontent.com/dylantmoore/grf_s
 | Command | Description |
 |---------|-------------|
 | `grf_ate` | Average treatment effect (AIPW doubly-robust estimator) |
+| `grf_average_partial_effect` | Average partial effect for continuous treatments |
 | `grf_best_linear_projection` | Project CATEs onto covariates (BLP) |
 | `grf_test_calibration` | Calibration test for forest predictions |
 | `grf_variable_importance` | Variable importance via weighted split frequencies |
+| `grf_get_scores` | Extract doubly-robust/IPCW score variables |
 | `grf_rate` | Rank-weighted average treatment effect (AUTOC/QINI) |
 | `grf_predict` | Predict on new (out-of-sample) data |
 | `grf_tune` | Cross-validation tuning of forest parameters |
+
+Utility/introspection commands:
+
+- `grf_forest_summary`
+- `grf_tree_summary`
+- `grf_get_tree`
+- `grf_get_leaf_node`
+- `grf_get_forest_weights`
+- `grf_merge_forests`
+- `grf_split_frequencies`
+- `grf_plot_tree`
 
 ## Quick Start
 
@@ -82,7 +95,8 @@ grf_rate tau_hat
 
 - **Full grf C++ backend**: Same algorithms as the R package, not a reimplementation
 - **12 forest types**: Regression, causal, quantile, instrumental, probability, survival, causal survival, multi-arm causal, multi-regression, local linear, boosted, LM forest
-- **7 post-estimation commands**: ATE, BLP, calibration test, variable importance, RATE, predict, tune
+- **Post-estimation suite**: ATE, APE, BLP, calibration test, variable importance, DR/IPCW scores, RATE, predict, tune
+- **Utility/introspection suite**: forest/tree summaries, tree/leaf extraction helpers, proxy weights, split-frequency proxies, merge helpers, and plot wrapper
 - **Honest estimation**: Split-selection and leaf-estimation on disjoint subsamples (default)
 - **Variance estimation**: Out-of-bag variance estimates for CATEs
 - **Prediction on new data**: Append test observations and predict with `grf_predict`
@@ -109,7 +123,7 @@ All forest commands share these options:
 | `estimatevariance` | off | Compute variance estimates |
 | `replace` | off | Overwrite existing variables |
 | `cluster(varname)` | none | Cluster variable for cluster-robust forests |
-| `weights(varname)` | none | Sample weights variable |
+| `weights(varname)` | none | Sample weights variable (maps to R `sample.weights`) |
 | `nomia` | MIA on | Disable Missing Indicator Action (casewise deletion) |
 
 ## Stored Results
@@ -118,6 +132,7 @@ All forest commands store results in `e()`:
 
 - `e(N)` — number of observations
 - `e(n_trees)` — number of trees
+- `e(model_id)` — session-local model identifier (increments each fit)
 - `e(ate)` / `e(ate_se)` — average treatment effect and SE (causal forests)
 - `e(cmd)` — command name
 - `e(forest_type)` — forest type identifier
@@ -127,10 +142,21 @@ See `help` for each command for complete stored results.
 
 ## Known Limitations vs R's grf
 
-- **User-supplied nuisance estimates**: R supports pre-computed `W.hat`, `Y.hat`, `Z.hat`. Stata always estimates nuisance parameters internally via regression forests.
-- **Local linear split variable selection**: R's `ll.split.variables` accepts a vector of variable indices. Stata's `llsplit` is a boolean toggle.
+- **User-supplied nuisance estimates**: supported for several forests (`yhatinput()`, `whatinput()`, `zhatinput()`, and related generators), but not every R nuisance hook is exposed for every forest family.
+- **Some forest-inspection utilities**: full tree/forest object persistence is constrained by the plugin architecture.
 - **APE deprecation**: R has deprecated `average_partial_effect()`. Stata retains `grf_average_partial_effect` for backward compatibility.
-- **Causal survival DR scores**: `grf_get_scores` after `grf_causal_survival_forest` returns plug-in CATE scores, not full AIPW doubly-robust scores.
+- **Causal survival scores**: `grf_get_scores` now uses IPCW nuisance moments from the fitted causal-survival pipeline. Exact parity can still differ in advanced workflows that depend on unavailable upstream internals.
+- **Package-level options API**: R's `grf_options()` is not mirrored; Stata uses per-command options by design.
+- **OOB prediction toggle**: R's `compute.oob.predictions` option is not exposed; Stata fit commands always materialize prediction outputs by command design.
+- **Upstream-constrained parity**: options such as `orthog.boosting` and enum-style `honesty.prune.method` are not exposed under the current vendored core API.
+
+## Testing
+
+Run the standard regression suite from the project root:
+
+```stata
+do tests/run_all.do
+```
 
 ## Requirements
 

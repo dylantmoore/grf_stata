@@ -2,7 +2,7 @@
 *! Version 0.3.0
 *! Projects AIPW DR scores onto covariates via OLS with robust SEs
 *! Matches grf::best_linear_projection() which uses DR scores, not raw tau_hat
-*! Supports vcov.type (HC0/HC1/HC2/HC3) and target.sample (all/overlap)
+*! Supports vcov.type (HC0/HC1/HC2/HC3) and target.sample (all/overlap/treated/control)
 *!
 *! NOTE: This is an eclass command. Running it replaces the causal forest
 *! e() results with regression output (same as R's best_linear_projection).

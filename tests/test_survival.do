@@ -98,10 +98,10 @@ display as text "  PASSED"
 display as text ""
 display as text "--- Test 4: Fidelity vs R reference ---"
 
-capture confirm file "tests/ref/survival_input.csv"
+capture confirm file "ref/survival_input.csv"
 if _rc == 0 {
     clear
-    import delimited "tests/ref/survival_input.csv", clear
+    import delimited "ref/survival_input.csv", clear
 
     * Run forest on same data (R uses x1-x5)
     grf_survival_forest time status x1 x2 x3 x4 x5, gen(stata_surv) ntrees(2000) ///
@@ -109,7 +109,7 @@ if _rc == 0 {
 
     * Load R predictions
     preserve
-    import delimited "tests/ref/survival_output.csv", clear
+    import delimited "ref/survival_output.csv", clear
     * R generates columns named t1, t2, ..., t10 (failure time columns)
     gen n = _n
     tempfile rref
@@ -143,7 +143,7 @@ if _rc == 0 {
     }
 }
 else {
-    display as text "  Skipped (no reference data at tests/ref/survival_input.csv)"
+    display as text "  Skipped (no reference data at ref/survival_input.csv)"
     display as text "  Run: Rscript tests/generate_reference.R"
 }
 

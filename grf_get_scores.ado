@@ -1,6 +1,6 @@
-*! grf_get_scores.ado -- Extract doubly-robust scores from causal/instrumental/multi-arm forest
-*! Version 0.2.0
-*! Computes AIPW doubly-robust scores Gamma_i for post-estimation analysis
+*! grf_get_scores.ado -- Extract DR/IPCW scores from supported GRF causal forests
+*! Version 0.3.0
+*! Computes AIPW-style or IPCW-moment-corrected scores for post-estimation analysis
 
 program define grf_get_scores, rclass
     version 14.0
@@ -128,12 +128,14 @@ program define grf_get_scores, rclass
     }
 
     /* ====================================================================
-     * Causal survival forest: simplified DR scores
+     * Causal survival forest: IPCW/DR scores from nuisance moments
      * ==================================================================== */
     if "`forest_type'" == "causal_survival" {
-        local tauvar    "`e(predict_var)'"
-        local treatvar  "`e(treatvar)'"
-        local whatvar   "`e(what_var)'"
+        local tauvar      "`e(predict_var)'"
+        local numervar    "`e(numer_var)'"
+        local denomvar    "`e(denom_var)'"
+        local nuisance_mode "`e(nuisance_mode)'"
+        local cluster_var "`e(cluster_var)'"
 
         /* Handle replace */
         if "`replace'" != "" {
@@ -141,8 +143,18 @@ program define grf_get_scores, rclass
         }
         confirm new variable `generate'
 
+        /* Fall back to canonical nuisance variable names if e() macros are absent */
+        if "`numervar'" == "" {
+            capture confirm numeric variable _grf_cs_numer
+            if !_rc local numervar "_grf_cs_numer"
+        }
+        if "`denomvar'" == "" {
+            capture confirm numeric variable _grf_cs_denom
+            if !_rc local denomvar "_grf_cs_denom"
+        }
+
         /* Confirm required variables */
-        foreach v in tauvar treatvar whatvar {
+        foreach v in tauvar numervar denomvar {
             if "``v''" == "" {
                 display as error "required variable not found: `v'"
                 exit 111
@@ -153,7 +165,7 @@ program define grf_get_scores, rclass
         /* Mark sample */
         tempvar touse
         quietly gen byte `touse' = 1
-        markout `touse' `tauvar' `treatvar' `whatvar'
+        markout `touse' `tauvar' `numervar' `denomvar'
         quietly count if `touse'
         local n_use = r(N)
 
@@ -162,42 +174,70 @@ program define grf_get_scores, rclass
             exit 2000
         }
 
-        /* For causal survival, R's full DR scores require:
-         *   - Censoring survival function S_C(t|X)
-         *   - Censoring hazard estimates
-         *   - IPCW (inverse probability of censoring weights)
-         * These are NOT stored in e() results.
+        /* IPCW/DR moment correction for ratio estimands:
          *
-         * We return tau_hat as a plug-in "score" for downstream BLP/RATE.
-         * This is NOT a true AIPW doubly-robust score — it lacks the
-         * outcome residual debiasing term. For rigorous DR inference,
-         * users should compute scores in R using grf::get_scores().
+         *   tau_hat_i = forest prediction
+         *   numer_i, denom_i = causal-survival nuisance moments
+         *
+         * Influence-style score:
+         *   score_i = tau_hat_i + (numer_i - denom_i * tau_hat_i) / E[denom]
+         *
+         * This uses the same orthogonal moments that define the causal-survival
+         * forest objective, and reduces to plug-in tau only when moment residuals
+         * are identically zero.
          */
-        quietly gen double `generate' = `tauvar' if `touse'
-        label variable `generate' "CATE scores from causal_survival forest (plug-in, not AIPW)"
+        quietly summarize `denomvar' if `touse', meanonly
+        local denom_mean = r(mean)
+        if abs(`denom_mean') < 1e-12 {
+            display as error "mean IPCW denominator is near zero; cannot compute scores"
+            exit 498
+        }
+
+        tempvar moment_resid
+        quietly gen double `moment_resid' = `numervar' - `denomvar' * `tauvar' if `touse'
+        quietly gen double `generate' = `tauvar' + (`moment_resid' / `denom_mean') if `touse'
+        label variable `generate' "IPCW doubly-robust scores from causal_survival forest"
 
         /* Summary statistics */
-        quietly summarize `generate' if `touse'
+        quietly summarize `generate' if `touse', detail
         local n_scores = r(N)
         local score_mean = r(mean)
         local score_sd = r(sd)
-        local score_se = `score_sd' / sqrt(`n_scores')
+        local score_min = r(min)
+        local score_max = r(max)
+
+        if "`cluster_var'" != "" {
+            confirm numeric variable `cluster_var'
+            tempvar score_dev cl_sum cl_tag cl_sum_sq
+            quietly gen double `score_dev' = `generate' - `score_mean' if `touse'
+            quietly bysort `cluster_var': egen double `cl_sum' = total(`score_dev') if `touse'
+            quietly bysort `cluster_var': gen byte `cl_tag' = (_n == 1) if `touse'
+            quietly gen double `cl_sum_sq' = `cl_sum'^2 if `cl_tag' & `touse'
+            quietly summarize `cl_sum_sq' if `cl_tag' & `touse', meanonly
+            local score_se = sqrt(r(sum)) / `n_scores'
+        }
+        else {
+            local score_se = `score_sd' / sqrt(`n_scores')
+        }
 
         /* Display results */
         display as text ""
-        display as text "Causal Survival Doubly-Robust Scores"
+        display as text "Causal Survival IPCW Doubly-Robust Scores"
         display as text "{hline 55}"
         display as text "Forest type:           " as result "causal_survival"
+        display as text "Nuisance mode:         " as result cond("`nuisance_mode'"=="", "unspecified", "`nuisance_mode'")
         display as text "Observations:          " as result `n_scores'
+        display as text "E[denominator]:        " as result %12.6f `denom_mean'
         display as text "{hline 55}"
         display as text ""
-        display as text "Summary of DR scores (`generate'):"
+        display as text "Summary of IPCW DR scores (`generate'):"
         display as text "  Mean:         " as result %12.6f `score_mean'
         display as text "  Std. Dev.:    " as result %12.6f `score_sd'
         display as text "  Std. Err.:    " as result %12.6f `score_se'
+        display as text "  Min:          " as result %12.6f `score_min'
+        display as text "  Max:          " as result %12.6f `score_max'
         display as text ""
-        display as text "Note: Simplified DR scores (propensity-corrected CATE)."
-        display as text "      Full survival DR scores require censoring hazard estimates."
+        display as text "Note: scores use stored IPCW nuisance moments (numerator/denominator)."
         display as text ""
 
         /* Store results */
@@ -205,6 +245,9 @@ program define grf_get_scores, rclass
         return scalar mean     = `score_mean'
         return scalar sd       = `score_sd'
         return scalar se       = `score_se'
+        return scalar min      = `score_min'
+        return scalar max      = `score_max'
+        return scalar denom_mean = `denom_mean'
         return local  generate   "`generate'"
         return local  forest_type "causal_survival"
         exit
@@ -236,13 +279,25 @@ program define grf_get_scores, rclass
 
         /* Check if nuisance variables are available */
         if "`yhatvar'" == "" | "`whatvar'" == "" {
-            capture confirm numeric variable _grf_yhat
+            capture confirm numeric variable _grf_if_yhat
             if !_rc {
-                local yhatvar "_grf_yhat"
+                local yhatvar "_grf_if_yhat"
             }
-            capture confirm numeric variable _grf_what
+            else {
+                capture confirm numeric variable _grf_yhat
+                if !_rc {
+                    local yhatvar "_grf_yhat"
+                }
+            }
+            capture confirm numeric variable _grf_if_what
             if !_rc {
-                local whatvar "_grf_what"
+                local whatvar "_grf_if_what"
+            }
+            else {
+                capture confirm numeric variable _grf_what
+                if !_rc {
+                    local whatvar "_grf_what"
+                }
             }
         }
     }

@@ -334,6 +334,11 @@ program define grf_ll_regression_forest, eclass
 
     /* ---- Store results ---- */
     ereturn clear
+    capture scalar __grf_model_counter = __grf_model_counter + 1
+    if _rc {
+        scalar __grf_model_counter = 1
+    }
+    ereturn scalar model_id = __grf_model_counter
     ereturn scalar N           = `n_use'
     ereturn scalar n_trees     = `ntrees'
     ereturn scalar seed        = `seed'

@@ -349,6 +349,73 @@ else {
     display as result "PASS: default e() values"
 }
 
+* ---- Test 19: failuretimes() with explicit numlist ----
+capture noisily {
+    grf_survival_forest time status x1-x5, gen(sp19) ntrees(100) seed(42) ///
+        failuretimes(0.5 1 2 4 8)
+    assert !missing(sp19_s1) in 1
+    assert !missing(sp19_s5) in 1
+    assert e(n_output) == 5
+    local ft_list "`e(failure_times)'"
+    local n_ft : word count `ft_list'
+    assert `n_ft' == 5
+    local ft1 : word 1 of `ft_list'
+    local ft2 : word 2 of `ft_list'
+    local ft3 : word 3 of `ft_list'
+    local ft4 : word 4 of `ft_list'
+    local ft5 : word 5 of `ft_list'
+    assert abs(real("`ft1'") - 0.5) < 1e-10
+    assert abs(real("`ft2'") - 1) < 1e-10
+    assert abs(real("`ft3'") - 2) < 1e-10
+    assert abs(real("`ft4'") - 4) < 1e-10
+    assert abs(real("`ft5'") - 8) < 1e-10
+    forvalues j = 2/5 {
+        local jprev = `j' - 1
+        assert sp19_s`jprev'[1] >= sp19_s`j'[1] - 1e-10
+    }
+    forvalues j = 1/5 {
+        capture drop sp19_s`j'
+    }
+}
+if _rc {
+    display as error "FAIL: failuretimes() explicit numlist"
+    local errors = `errors' + 1
+}
+else {
+    display as result "PASS: failuretimes() explicit numlist"
+}
+
+* ---- Test 20: failuretimes() from variable overrides noutput() ----
+capture noisily {
+    gen double ft_grid = .
+    replace ft_grid = 2 in 1
+    replace ft_grid = 1 in 2
+    replace ft_grid = 4 in 3
+    replace ft_grid = 8 in 4
+    replace ft_grid = 16 in 5
+    replace ft_grid = 4 in 6
+
+    grf_survival_forest time status x1-x5, gen(sp20) ntrees(100) seed(42) ///
+        noutput(3) failuretimes(ft_grid)
+
+    assert !missing(sp20_s1) in 1
+    assert !missing(sp20_s5) in 1
+    assert e(n_output) == 5
+    assert "`e(failure_times)'" == "1 2 4 8 16"
+
+    forvalues j = 1/5 {
+        capture drop sp20_s`j'
+    }
+    drop ft_grid
+}
+if _rc {
+    display as error "FAIL: failuretimes() from variable"
+    local errors = `errors' + 1
+}
+else {
+    display as result "PASS: failuretimes() from variable"
+}
+
 * ============================================================
 * Summary
 * ============================================================
